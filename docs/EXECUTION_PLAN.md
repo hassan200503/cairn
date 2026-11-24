@@ -96,9 +96,10 @@ tests against `simg2img`; skip-with-reason only when the oracle is absent locall
 fails the suite; malformed images are rejected identically to libsparse for the
 covered cases.
 **Depends on:** T01.
-**Status:** harness landed (2026-11-25). Locally skips with a reason because libsparse
-is absent; the dedicated CI job installs `android-sdk-libsparse-utils`. Malformed-case
-equivalence with libsparse is pending a green oracle run.
+**Status:** harness landed and green in CI (run `45500165412`): the dedicated Ubuntu
+job installs `android-sdk-libsparse-utils` and the `img2simg`/`simg2img` round trip
+passes. Locally the oracle skips with a reason when libsparse is absent. Malformed
+cases are covered by unit tests but not yet differentially compared with libsparse.
 
 ### T03 - Evidence graph completion
 
