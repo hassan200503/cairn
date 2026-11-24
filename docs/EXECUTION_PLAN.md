@@ -108,6 +108,10 @@ invalidation, source strength ordering, serialization.
 **Accept:** property tests for freshness and strength; a probe before reboot cannot
 satisfy a post-reboot precondition; inferred evidence is never usable.
 **Depends on:** T01.
+**Status:** landed (2026-11-25). Evidence IDs are deterministic and verified on load;
+the graph stamps facts with a boot epoch, invalidates earlier epochs on reboot, refuses
+inferred and stale evidence, and survives JSON persistence. Units and source-strength
+property tests are green.
 
 ### T04 - Subprocess wrapper and tool manifest
 

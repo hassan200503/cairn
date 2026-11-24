@@ -32,6 +32,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Read-only fastboot adapter and `cairn probe` command with JSON output; simulated
   probes are labeled and their evidence source is `INFERRED`.
 - Fail-closed AOSP v1 `fastboot-info.txt` parser.
+- Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
+  inferred/stale refusal, verified JSON serialization, and property tests.
 
 ### Known limitations
 
