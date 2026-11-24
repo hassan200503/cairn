@@ -1,0 +1,80 @@
+name: Hardware finding
+description: Record a real-device observation for the Cairn catalog and safety rules.
+title: "HF: "
+labels: ["hardware-finding"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Scrub before submitting.** Remove IMEI, serial numbers, MAC addresses,
+        phone numbers, account names, and any personal data. Use a lab ID. Never
+        attach an unscrubbed transcript or screenshot.
+  - type: input
+    id: device
+    attributes:
+      label: Device model and codename
+      placeholder: "Pixel 8 (shiba)"
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware build and region
+      placeholder: "AP1A.xxxx, US"
+    validations:
+      required: true
+  - type: dropdown
+    id: lock
+    attributes:
+      label: Bootloader state
+      options: [locked, unlocked, unknown]
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host and platform-tools version
+      placeholder: "Windows 11 24H2, platform-tools 36.0.0"
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands and observations
+      description: List each command, the expected result, and what happened.
+      placeholder: |
+        getvar max-fetch-size
+        expected: unknown
+        observed: 0
+    validations:
+      required: true
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options: [capability, identity, rollback, recovery, quirk, failure]
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Safety impact
+      description: Which rule, verification level, or catalog fact does this affect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and confirmation
+      description: Was it reproduced twice or on a second device? Include scrubbed logs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scrub
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed all device identifiers and personal data.
+          required: true
+        - label: This was a sacrificial device, not a daily driver.
+          required: true

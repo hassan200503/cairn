@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "device": {
+    "name": "Synthetic Pixel 8 fixture",
+    "note": "Fabricated values for tests and demos. This is not a real device transcript.",
+    "created": "2026-11-25"
+  },
+  "steps": [
+    {
+      "argv": ["devices"],
+      "exit_code": 0,
+      "stdout": "SIM123\tfastboot\n",
+      "stderr": ""
+    },
+    {
+      "argv": ["-s", "SIM123", "getvar", "all"],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "(bootloader) version:0.4\n(bootloader) version-bootloader:ripcurrent-15.0-12345678\n(bootloader) version-baseband:g5300q-12345-123456\n(bootloader) product:shiba\n(bootloader) serialno:SIM123\n(bootloader) variant:US\n(bootloader) hw-revision:MP1.0\n(bootloader) secure:yes\n(bootloader) unlocked:yes\n(bootloader) current-slot:b\n(bootloader) slot-count:2\n(bootloader) is-userspace:no\n(bootloader) max-download-size:0x20000000\n(bootloader) super-partition-name:super\n(bootloader) snapshot-update-status:none\n(bootloader) dynamic-partition:true\n(bootloader) treble-enabled:yes\n(bootloader) battery-voltage:4301\n(bootloader) battery-soc:87\n(bootloader) battery-soc-ok:yes\n(bootloader) system-fingerprint:google/shiba/shiba:15/AP3A.241105.008/12345678:user/release-keys\n(bootloader) vendor-fingerprint:google/shiba/shiba:15/AP3A.241105.008/12345678:user/release-keys\n(bootloader) security-patch-level:2024-11-05\n(bootloader) first-api-level:34\n(bootloader) has-slot:boot:yes\n(bootloader) partition-size:boot_a:0x10000000\n(bootloader) slot-successful:a:yes\n(bootloader) slot-unbootable:a:no\n(bootloader) slot-retry-count:a:3\n"
+    },
+    {
+      "argv": ["-s", "SIM123", "getvar", "snapshot-update-status"],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "(bootloader) snapshot-update-status:none\n"
+    },
+    {
+      "argv": ["-s", "SIM123", "getvar", "unlocked"],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "(bootloader) unlocked:yes\n"
+    },
+    {
+      "argv": ["-s", "SIM123", "getvar", "nosuchvar"],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "FAILED (remote: 'GetVar Variable Not found')\n"
+    },
+    {
+      "argv": ["-s", "BAD", "getvar", "all"],
+      "exit_code": 255,
+      "stdout": "",
+      "stderr": "fastboot: error: no devices/emulators found\n",
+      "fault": "disconnect"
+    },
+    {
+      "argv": ["-s", "SLOW", "getvar", "all"],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "fault": "timeout"
+    },
+    {
+      "argv": ["-s", "TRUNC", "getvar", "all"],
+      "exit_code": 0,
+      "stdout": "(bootloader) product:shiba\n(bootloader) unlocked:yes\n",
+      "stderr": "",
+      "fault": "truncated"
+    },
+    {
+      "argv": ["-s", "GARBAGE", "getvar", "all"],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "",
+      "fault": "garbage"
+    }
+  ]
+}

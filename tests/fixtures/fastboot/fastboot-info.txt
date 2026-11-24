@@ -1,0 +1,18 @@
+# Synthetic fastboot-info fixture (AOSP v1 grammar)
+version 1
+flash bootloader bootloader.img
+flash radio radio.img
+reboot bootloader
+flash boot boot.img
+flash init_boot init_boot.img
+flash vendor_boot vendor_boot.img
+reboot fastboot
+update-super
+flash system system.img
+flash vendor vendor.img
+flash product product.img
+flash vbmeta vbmeta.img --apply-vbmeta
+if-wipe flash userdata
+if-wipe erase metadata
+flash dtbo dtbo.img --slot-other
+reboot fastboot
