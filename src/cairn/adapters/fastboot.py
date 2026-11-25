@@ -133,6 +133,13 @@ class FastbootClient:
         argv.extend(args)
         return tuple(argv)
 
+    def devices(self) -> ToolResult:
+        return self._runner.run(
+            self._argv(("devices",), serial=None),
+            timeout_s=self._timeout_s,
+            extra_env=self._extra_env,
+        )
+
     def getvar_all(self, *, serial: str | None = None) -> ToolResult:
         return self._runner.run(
             self._argv(("getvar", "all"), serial=serial),
@@ -222,6 +229,22 @@ class FastbootClient:
             cancelled=result.cancelled,
             detail=detail,
         )
+
+
+def parse_fastboot_devices(text: str) -> tuple[str, ...]:
+    """Parse ``fastboot devices`` output into serial numbers."""
+    serials: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("<") or line.startswith("?"):
+            continue
+        parts = line.split()
+        if not parts:
+            continue
+        serial = parts[0]
+        if serial and serial not in serials:
+            serials.append(serial)
+    return tuple(serials)
 
 
 def parse_getvar_output(text: str) -> dict[str, str]:

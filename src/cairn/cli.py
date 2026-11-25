@@ -14,7 +14,9 @@ from cairn import __version__
 from cairn.adapters.fastboot import FastbootClient, ProbedFact, ProbeResult
 from cairn.core.errors import ToolError
 from cairn.core.evidence import EvidenceSource
+from cairn.core.tristate import Tri
 from cairn.core.verification import VerificationLevel
+from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
@@ -22,7 +24,7 @@ from cairn.tools.runner import ToolRunner
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
-EXIT_NOT_IMPLEMENTED = 3
+EXIT_UNKNOWN = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +55,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="emit machine-readable output",
+    )
+    doctor.add_argument(
+        "--fastboot",
+        type=Path,
+        help="path to the official fastboot executable (default: CAIRN_FASTBOOT or PATH)",
+    )
+    doctor.add_argument(
+        "--adb",
+        type=Path,
+        help="path to the official adb executable (default: CAIRN_ADB or PATH)",
+    )
+    doctor.add_argument("--serial", help="target device serial for the link soak")
+    doctor.add_argument(
+        "--simulate",
+        type=Path,
+        metavar="TRANSCRIPT",
+        help="replay a transcript for the link soak instead of touching hardware",
+    )
+    doctor.add_argument(
+        "--soak",
+        type=int,
+        default=SOAK_ATTEMPTS_DEFAULT,
+        metavar="N",
+        help=f"link soak probe count (default {SOAK_ATTEMPTS_DEFAULT}; 0 disables)",
     )
 
     probe = subparsers.add_parser(
@@ -101,23 +127,77 @@ def main(argv: Sequence[str] | None = None) -> int:
         return EXIT_OK
 
     if args.command == "doctor":
-        payload = {
-            "status": "not_implemented",
-            "milestone": "M1",
-            "checks_run": 0,
-            "message": "Host Doctor is not implemented. No device checks were performed.",
-        }
-        if args.json:
-            print(json.dumps(payload, indent=2))
-        else:
-            print("cairn doctor: NOT RUN (scheduled for M1)")
-            print(payload["message"])
-        return EXIT_NOT_IMPLEMENTED
+        return _run_doctor(args)
 
     if args.command == "probe":
         return _run_probe(args)
 
     parser.error(f"unknown command: {args.command}")
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    if args.soak < 0:
+        print("cairn doctor: --soak must not be negative", file=sys.stderr)
+        return EXIT_USAGE
+
+    runner = ToolRunner()
+    simulated = args.simulate is not None
+    fastboot_prefix: tuple[str, ...] | None
+    fastboot_extra_env: dict[str, str] | None = None
+    fastboot_label: str
+
+    if simulated:
+        fastboot_prefix = (sys.executable, "-m", "cairn.sim.fastboot_sim")
+        fastboot_extra_env = {TRANSCRIPT_ENV: str(args.simulate)}
+        fastboot_label = "simulated transcript"
+    else:
+        fastboot = _resolve_fastboot(args.fastboot)
+        if fastboot is None:
+            fastboot_prefix = None
+            fastboot_label = "not found"
+        else:
+            fastboot_prefix = (str(fastboot),)
+            fastboot_label = str(fastboot)
+
+    adb = _resolve_tool("adb", args.adb, "CAIRN_ADB")
+    report = HostDoctor(runner).run(
+        fastboot_prefix=fastboot_prefix,
+        fastboot_label=fastboot_label,
+        adb_path=adb,
+        serial=args.serial,
+        soak_attempts=args.soak,
+        simulated=simulated,
+        fastboot_extra_env=fastboot_extra_env,
+    )
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        _print_doctor(report)
+    return report.exit_code
+
+
+def _print_doctor(report: HostReport) -> None:
+    suffix = " (simulated link)" if report.simulated else ""
+    print(f"cairn doctor: read-only host checks{suffix}")
+    for key in ("os", "release", "machine", "python", "fastboot"):
+        if key in report.environment:
+            print(f"{key}: {report.environment[key]}")
+    for check in report.checks:
+        print(f"{check.name}: {check.state.name} - {check.detail}")
+    if report.soak is not None:
+        print(
+            f"soak: {report.soak.attempts} attempts, {report.soak.failures} failures, "
+            f"slowest {report.soak.max_ms:.0f} ms"
+        )
+    verdict = report.verdict
+    if verdict is Tri.TRUE:
+        print("verdict: TRUE - required host checks passed")
+    elif verdict is Tri.FALSE:
+        print("verdict: FALSE - a required host check failed; do not flash on this host")
+    else:
+        print("verdict: UNKNOWN - required checks did not complete; treat as unsafe")
+    print("read-only: no device writes were performed")
 
 
 def _run_probe(args: argparse.Namespace) -> int:
@@ -190,12 +270,16 @@ def _run_probe(args: argparse.Namespace) -> int:
 
 
 def _resolve_fastboot(explicit: Path | None) -> Path | None:
+    return _resolve_tool("fastboot", explicit, "CAIRN_FASTBOOT")
+
+
+def _resolve_tool(name: str, explicit: Path | None, env_var: str) -> Path | None:
     if explicit is not None:
         return explicit
-    env_value = os.environ.get("CAIRN_FASTBOOT")
+    env_value = os.environ.get(env_var)
     if env_value:
         return Path(env_value)
-    found = shutil.which("fastboot")
+    found = shutil.which(name)
     return Path(found) if found is not None else None
 
 

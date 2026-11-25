@@ -156,6 +156,11 @@ WSL/VM warning, antivirus heuristic, soak test using `getvar` and staged `downlo
 **Accept:** a bad cable/port/hub scenario is detected and blocks; a healthy setup
 passes; results are recorded with thresholds and tool versions.
 **Depends on:** T04, T06.
+**Status:** MVP landed (2026-11-25). Read-only checks cover WSL/VM, USB controllers,
+a Windows driver-package heuristic, USB selective suspend, antivirus heuristics,
+tool versions, and a bounded `getvar` soak with explicit failure/latency thresholds.
+A failed soak is FALSE and blocks. Staged-download soak and USB topology depth remain
+pending.
 
 ### T08 - Package parsers and unified manifest
 

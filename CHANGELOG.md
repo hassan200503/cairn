@@ -34,11 +34,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Fail-closed AOSP v1 `fastboot-info.txt` parser.
 - Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
   inferred/stale refusal, verified JSON serialization, and property tests.
+- Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,
+  USB selective-suspend check, antivirus warning, tool manifest checks, and a bounded
+  `getvar` link soak with failure and latency thresholds. Read-only by construction.
 
 ### Known limitations
 
 - No device write path.
-- `cairn doctor` reports `NOT RUN` and exits 3; Host Doctor is pending.
+- Host Doctor covers host, tool, and `getvar` link checks; staged-download soak,
+  driver enumeration, and USB topology depth are pending.
 - The sparse oracle skips locally when libsparse is absent; CI enforces it.
 - The fastboot adapter has not yet run against real hardware.
 - Sparse oracle, fastboot-info, and the AOSP fastboot source findings are verified

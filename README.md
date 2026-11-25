@@ -84,21 +84,31 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 uv sync
 uv run cairn version
 uv run cairn levels
+uv run cairn doctor
+uv run cairn probe --serial <serial>
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
 uv run pytest -q
 ```
 
-`cairn doctor` currently reports `NOT RUN` and exits 3. The Host Doctor lands in M1;
-the command will not pretend to have checked a host it cannot inspect yet.
+`cairn doctor` runs read-only host checks (WSL/VM, USB controllers, tool versions,
+power policy, antivirus heuristics) and a bounded `getvar` link soak. `cairn probe`
+performs a read-only `getvar all`. Both can replay a recorded transcript with
+`--simulate`, which is labeled as simulated and never treated as device evidence.
+Neither command writes to a device.
 
 ## Repository map
 
 ```text
 src/cairn/
-  core/          tri-state logic, evidence with provenance, verification levels, errors
-  sparse/        AOSP sparse format primitives and (later) the libsparse oracle
+  core/          tri-state logic, evidence graph, verification levels, errors
+  tools/         bounded subprocess runner and pinned tool manifest
+  sparse/        AOSP sparse format primitives, validation, and the libsparse oracle
+  adapters/      read-only device transports (fastboot first)
+  host/          Host Doctor: drivers, USB, power, virtualization, link soak
+  package/       fastboot-info parser and (later) factory-zip manifests
+  sim/           transcript schema and fault-injecting fastboot simulator
 docs/
   SPEC_V2.md          the reviewed, corrected v2 specification
   EXECUTION_PLAN.md   workstreams, phases, gates, first tasks

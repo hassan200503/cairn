@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from cairn import __version__
-from cairn.cli import EXIT_NOT_IMPLEMENTED, EXIT_OK, EXIT_USAGE, main
+from cairn.cli import EXIT_OK, EXIT_UNKNOWN, EXIT_USAGE, main
 
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "fastboot" / "pixel8_getvar_all.json"
 
@@ -26,16 +26,66 @@ def test_levels_command(capsys) -> None:
         assert level in output
 
 
-def test_doctor_reports_not_run(capsys) -> None:
-    assert main(["doctor"]) == EXIT_NOT_IMPLEMENTED
-    assert "NOT RUN" in capsys.readouterr().out
+def test_doctor_simulated_runs_a_link_soak(capsys) -> None:
+    exit_code = main(
+        [
+            "doctor",
+            "--simulate",
+            str(TRANSCRIPT),
+            "--serial",
+            "SIM123",
+            "--soak",
+            "2",
+        ]
+    )
+    output = capsys.readouterr().out
+    assert "cairn doctor" in output
+    assert "link-soak: TRUE" in output
+    assert "2 probes passed" in output
+    assert "read-only" in output
+    assert exit_code in (EXIT_OK, EXIT_UNKNOWN)
 
 
 def test_doctor_json_is_machine_readable(capsys) -> None:
-    assert main(["doctor", "--json"]) == EXIT_NOT_IMPLEMENTED
+    exit_code = main(
+        [
+            "doctor",
+            "--simulate",
+            str(TRANSCRIPT),
+            "--serial",
+            "SIM123",
+            "--soak",
+            "2",
+            "--json",
+        ]
+    )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["status"] == "not_implemented"
-    assert payload["checks_run"] == 0
+    assert payload["status"] == "ok"
+    assert payload["simulated"] is True
+    assert payload["soak"]["attempts"] == 2
+    assert payload["soak"]["state"] == "TRUE"
+    assert payload["tool"]["fastboot"]["simulated"] is True
+    assert payload["verdict"] in ("TRUE", "UNKNOWN")
+    assert exit_code in (EXIT_OK, EXIT_UNKNOWN)
+
+
+def test_doctor_missing_fastboot_is_unknown(tmp_path, capsys) -> None:
+    exit_code = main(
+        [
+            "doctor",
+            "--fastboot",
+            str(tmp_path / "no-fastboot.exe"),
+            "--soak",
+            "0",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    checks = {check["name"]: check for check in payload["checks"]}
+    assert checks["fastboot-tool"]["state"] == "UNKNOWN"
+    assert checks["link-soak"]["state"] == "UNKNOWN"
+    assert payload["verdict"] == "UNKNOWN"
+    assert exit_code == EXIT_UNKNOWN
 
 
 def test_probe_simulated_reports_read_only(capsys) -> None:
