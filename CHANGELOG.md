@@ -45,6 +45,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commands with deviations, annotates critical writes, hashes the canonical plan,
   and refuses to mark a plan executable without TRUE provenance and modeled options.
   The fallback is stop-and-reprobe, not a speculative flash sequence.
+- Safety rule engine v0 with SR-001 identity, SR-002 provenance, SR-003 AVB chain,
+  SR-004 rollback, SR-012 tool identity, and SR-013 lock/key aggregation. FALSE is
+  never overridable; UNKNOWN blocks unless the rule is explicitly overridable;
+  overrides log operator, reason, timestamp, evidence-snapshot hash, and exact report
+  text without converting UNKNOWN to TRUE. Checks that assert a result without
+  evidence references are downgraded to UNKNOWN.
 - Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
   inferred/stale refusal, verified JSON serialization, and property tests.
 - Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,

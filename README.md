@@ -119,6 +119,7 @@ src/cairn/
   package/       fastboot-info and factory/OTA package inspection
   plan/          read-only vendor-order planner and plan hash
   provenance/    offline vendor hash index (skeleton)
+  safety/        safety rule engine and override policy
   sim/           transcript schema and fault-injecting fastboot simulator
 docs/
   SPEC_V2.md          the reviewed, corrected v2 specification

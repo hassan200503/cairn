@@ -210,6 +210,14 @@ evidence graph; override policy; report header.
 UNKNOWN blocks unless the catalog allows it; overrides are logged with text and
 provenance.
 **Depends on:** T03, T09.
+**Status:** partial (2026-11-25). The safety engine implements SR-001 identity,
+SR-002 provenance, SR-003 AVB-chain, SR-004 rollback, SR-012 tool identity, and
+SR-013 lock/key aggregation over `CheckState` inputs. FALSE is never overridable;
+UNKNOWN blocks unless the rule is marked overridable; overrides record operator,
+typed reason, timestamp, evidence-snapshot hash, and the exact report text, and do
+not turn UNKNOWN into TRUE. Checks that claim TRUE/FALSE without evidence are
+downgraded to UNKNOWN. Real AVB and rollback inputs still depend on T09/T12, CLI
+wiring into `plan`/execution is pending, and mutation testing has not started.
 
 ### T12 - Rollback Oracle v0
 
