@@ -38,6 +38,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   properties are parsed without trusting them. `cairn inspect` prints the manifest
   with optional per-entry and archive hashes. Nested factory image zips are reported
   but not opened.
+- Offline vendor hash index and `cairn provenance`: strict JSON schema, duplicate and
+  unsafe-name rejection, archive/entry SHA-256 comparison, tri-state result, and an
+  explicit warning that a local index match is not a signature check.
 - Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
   inferred/stale refusal, verified JSON serialization, and property tests.
 - Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,

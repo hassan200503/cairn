@@ -87,6 +87,7 @@ uv run cairn levels
 uv run cairn doctor
 uv run cairn probe --serial <serial>
 uv run cairn inspect <package.zip>
+uv run cairn provenance <package.zip> --index <index.json>
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
@@ -98,8 +99,9 @@ power policy, antivirus heuristics) and a bounded `getvar` link soak. `cairn pro
 performs a read-only `getvar all`. Both can replay a recorded transcript with
 `--simulate`, which is labeled as simulated and never treated as device evidence.
 `cairn inspect` parses a factory or OTA zip without extracting it, reports unknown
-entries and nested archives, and can hash every entry with `--hash`. None of these
-commands writes to a device.
+entries and nested archives, and can hash every entry with `--hash`. The `cairn
+provenance` command hashes a package and compares it with a local JSON index; a match
+is a signal, not a signature check. None of these commands writes to a device.
 
 ## Repository map
 
@@ -111,6 +113,7 @@ src/cairn/
   adapters/      read-only device transports (fastboot first)
   host/          Host Doctor: drivers, USB, power, virtualization, link soak
   package/       fastboot-info and factory/OTA package inspection
+  provenance/    offline vendor hash index (skeleton)
   sim/           transcript schema and fault-injecting fastboot simulator
 docs/
   SPEC_V2.md          the reviewed, corrected v2 specification

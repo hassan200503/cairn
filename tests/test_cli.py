@@ -6,6 +6,7 @@ from pathlib import Path
 
 from cairn import __version__
 from cairn.cli import EXIT_FAILED, EXIT_OK, EXIT_UNKNOWN, EXIT_USAGE, main
+from cairn.package.archive import load_package
 
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "fastboot" / "pixel8_getvar_all.json"
 
@@ -170,3 +171,104 @@ def test_inspect_malformed_package_fails(tmp_path, capsys) -> None:
 
     assert exit_code == EXIT_FAILED
     assert "cannot read package" in capsys.readouterr().err
+
+
+def _write_index_for(package: Path, index: Path) -> Path:
+    manifest = load_package(package, hash_files=True, hash_archive=True)
+    assert manifest.archive_sha256 is not None
+    entries = {entry.name: entry.sha256 for entry in manifest.entries}
+    index.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "packages": [
+                    {
+                        "id": "cli-test",
+                        "device": "shiba",
+                        "build": "TEST.1",
+                        "archive_sha256": manifest.archive_sha256,
+                        "entries": entries,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return index
+
+
+def test_provenance_matches_local_index(tmp_path, capsys) -> None:
+    package = _write_factory_zip(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["provenance", str(package), "--index", str(index)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "verdict: TRUE" in output
+    assert "package id: cli-test" in output
+    assert "not a signature" in output
+
+
+def test_provenance_json_is_machine_readable(tmp_path, capsys) -> None:
+    package = _write_factory_zip(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["provenance", str(package), "--index", str(index), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["state"] == "TRUE"
+    assert payload["package_id"] == "cli-test"
+    assert payload["device"] == "shiba"
+    assert payload["archive_sha256"] is not None
+
+
+def test_provenance_unknown_package_is_unknown(tmp_path, capsys) -> None:
+    package = _write_factory_zip(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+    other = tmp_path / "other.zip"
+    with zipfile.ZipFile(other, "w") as archive:
+        archive.writestr("boot.img", b"different")
+
+    exit_code = main(["provenance", str(other), "--index", str(index)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "verdict: UNKNOWN" in output
+    assert "not in the local index" in output
+
+
+def test_provenance_entry_mismatch_is_false(tmp_path, capsys) -> None:
+    package = _write_factory_zip(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    payload["packages"][0]["entries"]["boot.img"] = "0" * 64
+    index.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(["provenance", str(package), "--index", str(index)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_FAILED
+    assert "verdict: FALSE" in output
+    assert "entry hash mismatch" in output
+
+
+def test_provenance_malformed_index_fails(tmp_path, capsys) -> None:
+    package = _write_factory_zip(tmp_path / "factory.zip")
+    index = tmp_path / "index.json"
+    index.write_bytes(b"not json")
+
+    exit_code = main(["provenance", str(package), "--index", str(index)])
+
+    assert exit_code == EXIT_FAILED
+    assert "not valid JSON" in capsys.readouterr().err
+
+
+def test_provenance_missing_index_fails(tmp_path, capsys) -> None:
+    package = _write_factory_zip(tmp_path / "factory.zip")
+
+    exit_code = main(["provenance", str(package), "--index", str(tmp_path / "missing.json")])
+
+    assert exit_code == EXIT_FAILED
+    assert "not found" in capsys.readouterr().err

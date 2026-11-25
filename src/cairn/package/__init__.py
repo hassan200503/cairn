@@ -12,6 +12,7 @@ from cairn.package.archive import (
     classify_entry,
     load_package,
     sha256_file,
+    validate_entry_name,
 )
 from cairn.package.fastboot_info import (
     EraseCommand,
@@ -44,4 +45,5 @@ __all__ = [
     "load_package",
     "parse_fastboot_info",
     "sha256_file",
+    "validate_entry_name",
 ]

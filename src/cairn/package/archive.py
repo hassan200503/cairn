@@ -296,8 +296,8 @@ def _inspect_entries(
     return tuple(entries), warnings
 
 
-def _validate_entry(info: zipfile.ZipInfo) -> None:
-    name = info.filename
+def validate_entry_name(name: str) -> None:
+    """Reject archive names that can escape or confuse the extraction root."""
     if not name:
         raise PackageError("archive contains an empty entry name")
     if "\x00" in name:
@@ -313,6 +313,11 @@ def _validate_entry(info: zipfile.ZipInfo) -> None:
     parts = trimmed.split("/")
     if any(part in ("", ".", "..") for part in parts):
         raise PackageError(f"archive entry {name!r} has an unsafe path segment")
+
+
+def _validate_entry(info: zipfile.ZipInfo) -> None:
+    name = info.filename
+    validate_entry_name(name)
 
     if info.flag_bits & 0x1:
         raise PackageError(f"archive entry {name!r} is encrypted")

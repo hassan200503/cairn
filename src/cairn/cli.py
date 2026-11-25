@@ -18,6 +18,12 @@ from cairn.core.tristate import Tri
 from cairn.core.verification import VerificationLevel
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
 from cairn.package.archive import PackageError, PackageManifest, load_package
+from cairn.provenance.hash_index import (
+    HashIndexError,
+    ProvenanceResult,
+    load_hash_index,
+    verify_manifest,
+)
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
@@ -123,6 +129,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="hash every entry and the archive (reads all data)",
     )
 
+    provenance = subparsers.add_parser(
+        "provenance",
+        help="match a package against a local hash index (read-only)",
+    )
+    provenance.add_argument("package", type=Path, help="factory or OTA zip")
+    provenance.add_argument(
+        "--index",
+        type=Path,
+        required=True,
+        help="local hash-index JSON",
+    )
+    provenance.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
     return parser
 
 
@@ -151,6 +174,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "inspect":
         return _run_inspect(args)
+
+    if args.command == "provenance":
+        return _run_provenance(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -341,6 +367,64 @@ def _print_inspect(manifest: PackageManifest) -> None:
         for warning in manifest.warnings:
             print(f"  {warning}")
     print("read-only: archive was not extracted; no device access")
+
+
+def _run_provenance(args: argparse.Namespace) -> int:
+    try:
+        index = load_hash_index(args.index)
+        manifest = load_package(
+            args.package,
+            hash_files=True,
+            hash_archive=True,
+        )
+    except (HashIndexError, PackageError) as exc:
+        print(f"cairn provenance: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    result = verify_manifest(index, manifest)
+    payload = {
+        "package": str(manifest.path),
+        "archive_sha256": manifest.archive_sha256,
+        "index": str(index.source),
+        **result.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_provenance(payload, result)
+
+    if result.state is Tri.TRUE:
+        return EXIT_OK
+    if result.state is Tri.FALSE:
+        return EXIT_FAILED
+    return EXIT_UNKNOWN
+
+
+def _print_provenance(
+    payload: Mapping[str, object],
+    result: ProvenanceResult,
+) -> None:
+    print(f"package: {payload['package']}")
+    print(f"archive sha256: {payload['archive_sha256']}")
+    print(f"index: {payload['index']}")
+    if result.package_id is not None:
+        details = []
+        if result.device:
+            details.append(f"device={result.device}")
+        if result.build:
+            details.append(f"build={result.build}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        print(f"package id: {result.package_id}{suffix}")
+    if result.state is Tri.TRUE:
+        print("verdict: TRUE - package matches the local hash index")
+    elif result.state is Tri.FALSE:
+        print("verdict: FALSE - package does not match the indexed package")
+    else:
+        print("verdict: UNKNOWN - package could not be matched to the local index")
+    for reason in result.reasons:
+        print(f"  {reason}")
+    print("note: a local index match is not a signature or authenticity check")
+    print("read-only: no device access")
 
 
 def _resolve_fastboot(explicit: Path | None) -> Path | None:

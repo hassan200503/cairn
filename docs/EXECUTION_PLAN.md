@@ -182,6 +182,11 @@ digest, lock-state-aware key check, `pixel_factory_image_verify.py` oracle.
 **Accept:** matches `avbtool` and the Pixel verifier on a corpus; chained VBMeta and
 per-location rollback indexes are handled; unknown package is Assisted, not Verified.
 **Depends on:** T08.
+**Status:** partial (2026-11-25). The offline vendor hash index and `cairn provenance`
+are implemented with strict schema validation, archive/entry hash comparison, and
+tri-state results; a local index match is explicitly not a signature check. `avbtool`
+chain-following verification, VBMeta digest, lock-state-aware key checks, and the
+Pixel verifier oracle are pending, along with real vendor hashes.
 
 ### T10 - Planner v0 and dry run
 

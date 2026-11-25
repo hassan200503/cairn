@@ -226,3 +226,18 @@ read-only and not signature-verified until T09/M8.
 **Consequences.** Real Pixel factory zips that keep `fastboot-info.txt` inside a
 nested image zip produce an incomplete manifest. No package is treated as verified
 from metadata alone.
+
+---
+
+## ADR-016 - Local hash index is a signal, not a signature
+
+**Context.** Repair shops need offline provenance, but a locally editable JSON file
+cannot establish authenticity.
+
+**Decision.** Treat an index match as a positive tri-state signal only. Require the
+archive SHA-256 and all indexed entry hashes to match. Unknown packages are UNKNOWN
+and remain Assisted until AVB/signature verification lands. A mismatch is FALSE and
+never overridable. The CLI says plainly that a match is not a signature check.
+
+**Consequences.** Shops can pin known packages without a network, but the index must
+later be signed and rotated (M11) before it can contribute to Verified status.
