@@ -50,3 +50,27 @@ SHA-256 of `signed_vbmeta.avbpubkey`:
 temporary-file handshake with `openssl` fails. The signature was independently
 checked with `openssl pkeyutl -verifyrecover -pkeyopt rsa_padding_mode:none`,
 which recovered the exact PKCS#1 v1.5 padded digest.
+
+## Signed image with an AVB footer
+
+`signed_boot.img` is a 128 KiB boot image with a 4 KiB test payload and a hash
+footer, signed with the same throwaway key. It exercises footer parsing and
+footer-embedded VBMeta handling.
+
+```text
+python avbtool.py generate_test_image --image_size 4096 --output boot.img
+python avbtool.py add_hash_footer \
+  --image boot.img \
+  --partition_name boot \
+  --partition_size 131072 \
+  --algorithm SHA256_RSA2048 \
+  --key testkey.pem \
+  --rollback_index 3 \
+  --salt 000102030405060708090a0b0c0d0e0f
+```
+
+SHA-256 of `signed_boot.img`:
+`33c3d2c531988a99ffcf9fd1bd12aadf1dad75f3ee62ec98684428f6bdbecb31`
+
+AOSP `avbtool calculate_vbmeta_digest` reports:
+`5ce1e97790e8afd1d7120da6fc785161049c2c1705fe7dd53addee590b1e22b7`

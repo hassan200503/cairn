@@ -25,10 +25,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Tool manifest with minimum versions, license audit flags, GPL separation markers,
   and SHA-256 verification; platform-tools 37.0.3 `fastboot.exe` artifact pinned.
 - Read-only AVB VBMeta parser and `cairn avb info|digest|verify`: strict header and
-  descriptor bounds, hash/hashtree/chain/property/kernel-cmdline descriptors, AOSP
-  digest with supplied chained images, and PKCS#1 v1.5 RSA signature verification
-  against the embedded key or an expected raw AVB public key. AOSP avbtool-generated
-  unsigned and signed fixtures; embedded-key validity is not a trust anchor.
+  descriptor bounds, standalone/padded/footer-embedded images, hash/hashtree/chain/
+  property/kernel-cmdline descriptors, AOSP digest with supplied chained images, and
+  PKCS#1 v1.5 RSA signature verification against the embedded key or an expected raw
+  AVB public key. AOSP avbtool-generated unsigned, signed, and footer fixtures;
+  embedded-key validity is not a trust anchor.
 - Full sparse-image walk and validation (chunk sizes, block totals, extended headers,
   trailing bytes), plus a `img2simg`/`simg2img` differential oracle harness and a
   dedicated CI job that installs AOSP libsparse on Ubuntu.

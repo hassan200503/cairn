@@ -720,7 +720,17 @@ def _print_vbmeta(image: VbmetaImage) -> None:
     source = image.source if image.source is not None else "(memory)"
     print(f"image: {source}")
     trailing = f" (+{image.trailing_bytes} trailing bytes)" if image.trailing_bytes else ""
-    print(f"size: {len(image.blob)} bytes{trailing}")
+    print(f"vbmeta size: {len(image.blob)} bytes{trailing}")
+    if image.image_size is not None:
+        print(f"image size: {image.image_size} bytes")
+    if image.footer is not None:
+        print(
+            f"footer: version={image.footer.version_major}."
+            f"{image.footer.version_minor}, "
+            f"original_image_size={image.footer.original_image_size}, "
+            f"vbmeta_offset={image.footer.vbmeta_offset}, "
+            f"vbmeta_size={image.footer.vbmeta_size}"
+        )
     print(f"algorithm: {header.algorithm.name}")
     print(f"version: {header.required_libavb_version_major}.{header.required_libavb_version_minor}")
     print(f"rollback index: {header.rollback_index}")

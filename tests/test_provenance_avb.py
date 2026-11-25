@@ -9,6 +9,7 @@ import pytest
 
 from cairn.provenance.avb import (
     AVB_MAGIC,
+    FOOTER_SIZE,
     AvbChainPartition,
     AvbError,
     AvbHashDescriptor,
@@ -18,7 +19,9 @@ from cairn.provenance.avb import (
     AvbUnknownDescriptor,
     calculate_vbmeta_digest,
     load_vbmeta,
+    parse_footer,
     parse_vbmeta,
+    parse_vbmeta_image,
     verify_vbmeta_signature,
 )
 
@@ -475,3 +478,57 @@ def test_verify_unsigned_image_cannot_match_expected_key() -> None:
     assert result.signed is False
     assert result.valid is False
     assert "cannot match an expected key" in result.reason
+
+
+SIGNED_BOOT_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "signed_boot.img"
+SIGNED_BOOT_DIGEST = "5ce1e97790e8afd1d7120da6fc785161049c2c1705fe7dd53addee590b1e22b7"
+
+
+def test_footer_image_parses_embedded_vbmeta() -> None:
+    image = load_vbmeta(SIGNED_BOOT_FIXTURE)
+
+    assert image.footer is not None
+    assert image.image_size == 131072
+    assert image.footer.original_image_size == 4096
+    assert image.footer.vbmeta_offset == 4096
+    assert image.footer.vbmeta_size == 1280
+    assert image.header.rollback_index == 3
+    assert image.hash_descriptors[0].partition_name == "boot"
+    assert image.to_dict()["footer"] is not None
+
+
+def test_footer_image_matches_aosp_vbmeta_digest() -> None:
+    assert calculate_vbmeta_digest(load_vbmeta(SIGNED_BOOT_FIXTURE)) == SIGNED_BOOT_DIGEST
+
+
+def test_footer_image_signature_is_valid() -> None:
+    result = verify_vbmeta_signature(load_vbmeta(SIGNED_BOOT_FIXTURE))
+
+    assert result.valid is True
+    assert result.algorithm.name == "SHA256_RSA2048"
+
+
+def test_footer_image_streams_when_above_file_cap() -> None:
+    image = load_vbmeta(SIGNED_BOOT_FIXTURE, max_bytes=2048)
+
+    assert image.footer is not None
+    assert image.image_size == 131072
+    assert verify_vbmeta_signature(image).valid is True
+
+
+def test_footer_image_rejects_oversized_vbmeta_in_streaming_mode() -> None:
+    with pytest.raises(AvbError, match="above the 1024-byte limit"):
+        load_vbmeta(SIGNED_BOOT_FIXTURE, max_bytes=1024)
+
+
+def test_footer_rejects_out_of_range_vbmeta_offset() -> None:
+    data = bytearray(SIGNED_BOOT_FIXTURE.read_bytes())
+    footer_offset = len(data) - FOOTER_SIZE
+    struct.pack_into(">Q", data, footer_offset + 20, len(data) * 2)
+
+    with pytest.raises(AvbError, match="offset lies outside"):
+        parse_vbmeta_image(bytes(data))
+
+
+def test_parse_footer_returns_none_without_magic() -> None:
+    assert parse_footer(FIXTURE.read_bytes()) is None

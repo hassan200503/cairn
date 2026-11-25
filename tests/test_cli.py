@@ -533,3 +533,33 @@ def test_avb_verify_missing_key_fails(tmp_path, capsys) -> None:
 
     assert exit_code == EXIT_FAILED
     assert "not found" in capsys.readouterr().err
+
+
+SIGNED_BOOT_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "signed_boot.img"
+
+
+def test_avb_info_footer_image(capsys) -> None:
+    exit_code = main(["avb", "info", str(SIGNED_BOOT_FIXTURE)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "footer:" in output
+    assert "image size: 131072 bytes" in output
+    assert "hash boot" in output
+
+
+def test_avb_digest_footer_image(capsys) -> None:
+    exit_code = main(["avb", "digest", str(SIGNED_BOOT_FIXTURE)])
+
+    output = capsys.readouterr().out.strip()
+    assert exit_code == EXIT_OK
+    assert output == "5ce1e97790e8afd1d7120da6fc785161049c2c1705fe7dd53addee590b1e22b7"
+
+
+def test_avb_verify_footer_image(capsys) -> None:
+    exit_code = main(["avb", "verify", str(SIGNED_BOOT_FIXTURE)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "signature: valid" in output
+    assert "not a trust anchor" in output

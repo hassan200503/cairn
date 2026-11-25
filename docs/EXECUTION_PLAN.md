@@ -186,14 +186,15 @@ per-location rollback indexes are handled; unknown package is Assisted, not Veri
 are implemented with strict schema validation, archive/entry hash comparison, and
 tri-state results; a local index match is explicitly not a signature check. A strict
 read-only VBMeta parser (`provenance/avb.py`) and `cairn avb info|digest|verify`
-now parse standalone or padded VBMeta headers and hash, hashtree, chain, property,
-and kernel cmdline descriptors, compute the AOSP digest from supplied chained
-images, and verify the VBMeta RSA signature against the embedded key with an
-optional expected raw AVB public key. AOSP avbtool-generated unsigned and signed
-fixtures validate the parser, and the signed fixture was cross-checked with
-`openssl` raw RSA recovery. Embedded-key validity is not a trust anchor:
-chain-of-trust key matching, footer-embedded VBMeta, per-location rollback
-handling, and the Pixel verifier oracle are pending, along with real vendor hashes.
+now parse standalone, padded, and footer-embedded VBMeta headers and hash,
+hashtree, chain, property, and kernel cmdline descriptors, compute the AOSP digest
+from supplied chained images, and verify the VBMeta RSA signature against the
+embedded key with an optional expected raw AVB public key. AOSP avbtool-generated
+unsigned, signed, and footer fixtures validate the parser; the signed fixtures were
+cross-checked with `openssl` raw RSA recovery, and the footer fixture matches the
+AOSP `calculate_vbmeta_digest` output. Embedded-key validity is not a trust anchor:
+chain-of-trust key matching, per-location rollback handling, and the Pixel verifier
+oracle are pending, along with real vendor hashes.
 
 ### T10 - Planner v0 and dry run
 

@@ -1,10 +1,10 @@
 """Strict, read-only AVB VBMeta parsing and signature checking.
 
-This module parses the VBMeta container and its descriptors and can check the
-VBMeta RSA signature against the embedded public key. It does not follow partition
-chains or establish a trust anchor; those are separate gates. Parsing is
-intentionally fail-closed: unknown algorithms, inconsistent sizes, overlapping
-blocks, and malformed descriptors are rejected.
+This module parses standalone, padded, and footer-embedded VBMeta containers and
+their descriptors and can check the VBMeta RSA signature against the embedded
+public key. It does not follow partition chains or establish a trust anchor; those
+are separate gates. Parsing is intentionally fail-closed: unknown algorithms,
+inconsistent sizes, overlapping blocks, and malformed descriptors are rejected.
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ from typing import Final
 from cairn.core.errors import ConfigurationError
 
 AVB_MAGIC: Final = b"AVB0"
+FOOTER_MAGIC: Final = b"AVBf"
 HEADER_SIZE: Final = 256
+FOOTER_SIZE: Final = 64
 DESCRIPTOR_HEADER_SIZE: Final = 16
 MAX_VBMETA_BYTES: Final = 64 * 1024 * 1024
 MAX_DESCRIPTORS: Final = 4096
@@ -32,6 +34,7 @@ _DIGEST_INFO: Final[Mapping[str, bytes]] = {
     "sha512": bytes.fromhex("3051300d060960864801650304020305000440"),
 }
 _HEADER_STRUCT: Final = struct.Struct(">4s2L2QL2Q2Q2Q2Q2QQLL47sx80x")
+_FOOTER_STRUCT: Final = struct.Struct(">4s2LQQQ28x")
 _DESCRIPTOR_HEADER_STRUCT: Final = struct.Struct(">QQ")
 _PROPERTY_STRUCT: Final = struct.Struct(">QQQQ")
 _HASHTREE_STRUCT: Final = struct.Struct(">QQLQQQLLLQQ32sLLLL60s")
@@ -40,6 +43,7 @@ _KERNEL_CMDLINE_STRUCT: Final = struct.Struct(">QQLL")
 _CHAIN_STRUCT: Final = struct.Struct(">QQLLLL60s")
 
 assert _HEADER_STRUCT.size == HEADER_SIZE
+assert _FOOTER_STRUCT.size == FOOTER_SIZE
 assert _PROPERTY_STRUCT.size == 32
 assert _HASHTREE_STRUCT.size == 180
 assert _HASH_STRUCT.size == 132
@@ -253,6 +257,23 @@ type AvbDescriptor = (
 
 
 @dataclass(frozen=True, slots=True)
+class AvbFooter:
+    version_major: int
+    version_minor: int
+    original_image_size: int
+    vbmeta_offset: int
+    vbmeta_size: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "version": f"{self.version_major}.{self.version_minor}",
+            "original_image_size": self.original_image_size,
+            "vbmeta_offset": self.vbmeta_offset,
+            "vbmeta_size": self.vbmeta_size,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AvbSignature:
     signed: bool
     valid: bool | None
@@ -283,6 +304,8 @@ class VbmetaImage:
     blob: bytes
     trailing_bytes: int = 0
     source: Path | None = None
+    footer: AvbFooter | None = None
+    image_size: int | None = None
 
     @property
     def chain_partitions(self) -> tuple[AvbChainPartition, ...]:
@@ -334,7 +357,9 @@ class VbmetaImage:
         return {
             "source": None if self.source is None else str(self.source),
             "size": len(self.blob),
+            "image_size": self.image_size,
             "trailing_bytes": self.trailing_bytes,
+            "footer": None if self.footer is None else self.footer.to_dict(),
             "header": self.header.to_dict(),
             "descriptors": [descriptor.to_dict() for descriptor in self.descriptors],
         }
@@ -400,6 +425,55 @@ def parse_vbmeta(data: bytes) -> VbmetaImage:
     )
 
 
+def parse_vbmeta_image(data: bytes) -> VbmetaImage:
+    """Parse a standalone VBMeta image or an image with an AVB footer."""
+    if data[:4] == AVB_MAGIC:
+        return parse_vbmeta(data)
+    footer = parse_footer(data)
+    if footer is None:
+        return parse_vbmeta(data)
+    start = footer.vbmeta_offset
+    end = start + footer.vbmeta_size
+    return _parse_footer_blob(data[start:end], footer, len(data))
+
+
+def parse_footer(data: bytes, *, image_size: int | None = None) -> AvbFooter | None:
+    """Parse the AVB footer at the end of an image, if present."""
+    if image_size is None:
+        image_size = len(data)
+    if image_size < FOOTER_SIZE or len(data) < FOOTER_SIZE:
+        return None
+    tail = data[-FOOTER_SIZE:]
+    magic = tail[:4]
+    if magic != FOOTER_MAGIC:
+        return None
+    (
+        _magic,
+        version_major,
+        version_minor,
+        original_image_size,
+        vbmeta_offset,
+        vbmeta_size,
+    ) = _FOOTER_STRUCT.unpack(tail)
+    if version_major != 1:
+        raise AvbError(f"unsupported AVB footer major version {version_major}")
+    if vbmeta_size < HEADER_SIZE:
+        raise AvbError(f"AVB footer VBMeta size {vbmeta_size} is below the header size")
+    if original_image_size > vbmeta_offset:
+        raise AvbError("AVB footer original image overlaps the VBMeta")
+    if vbmeta_offset > image_size - FOOTER_SIZE:
+        raise AvbError("AVB footer VBMeta offset lies outside the image")
+    if vbmeta_size > image_size - FOOTER_SIZE - vbmeta_offset:
+        raise AvbError("AVB footer VBMeta overruns the image")
+    return AvbFooter(
+        version_major=version_major,
+        version_minor=version_minor,
+        original_image_size=original_image_size,
+        vbmeta_offset=vbmeta_offset,
+        vbmeta_size=vbmeta_size,
+    )
+
+
 def load_vbmeta(path: Path, *, max_bytes: int = MAX_VBMETA_BYTES) -> VbmetaImage:
     if max_bytes <= 0:
         raise ValueError("max_bytes must be positive")
@@ -409,19 +483,49 @@ def load_vbmeta(path: Path, *, max_bytes: int = MAX_VBMETA_BYTES) -> VbmetaImage
         size = path.stat().st_size
     except OSError as exc:
         raise AvbError(f"cannot stat vbmeta image {path}: {exc}") from exc
-    if size > max_bytes:
-        raise AvbError(f"vbmeta image is {size} bytes, above the {max_bytes}-byte limit")
     try:
-        data = path.read_bytes()
+        if size <= max_bytes or size < FOOTER_SIZE:
+            data = path.read_bytes()
+            image = parse_vbmeta_image(data)
+        else:
+            with path.open("rb") as stream:
+                stream.seek(size - FOOTER_SIZE)
+                footer = parse_footer(stream.read(FOOTER_SIZE), image_size=size)
+                if footer is None:
+                    raise AvbError(
+                        f"image is {size} bytes, above the {max_bytes}-byte limit, "
+                        "and has no AVB footer"
+                    )
+                if footer.vbmeta_size > max_bytes:
+                    raise AvbError(
+                        f"AVB footer VBMeta is {footer.vbmeta_size} bytes, "
+                        f"above the {max_bytes}-byte limit"
+                    )
+                stream.seek(footer.vbmeta_offset)
+                blob = stream.read(footer.vbmeta_size)
+            image = _parse_footer_blob(blob, footer, size)
     except OSError as exc:
         raise AvbError(f"cannot read vbmeta image {path}: {exc}") from exc
-    image = parse_vbmeta(data)
     return VbmetaImage(
         header=image.header,
         descriptors=image.descriptors,
         blob=image.blob,
         trailing_bytes=image.trailing_bytes,
         source=path,
+        footer=image.footer,
+        image_size=image.image_size,
+    )
+
+
+def _parse_footer_blob(blob: bytes, footer: AvbFooter, image_size: int) -> VbmetaImage:
+    image = parse_vbmeta(blob)
+    return VbmetaImage(
+        header=image.header,
+        descriptors=image.descriptors,
+        blob=image.blob,
+        trailing_bytes=image.trailing_bytes,
+        footer=footer,
+        image_size=image_size,
     )
 
 

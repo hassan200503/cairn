@@ -3,11 +3,14 @@
 from cairn.provenance.avb import (
     ALGORITHMS_BY_TYPE,
     AVB_MAGIC,
+    FOOTER_MAGIC,
+    FOOTER_SIZE,
     HEADER_SIZE,
     MAX_VBMETA_BYTES,
     AvbAlgorithm,
     AvbChainPartition,
     AvbError,
+    AvbFooter,
     AvbHashDescriptor,
     AvbHashtreeDescriptor,
     AvbHeader,
@@ -18,7 +21,9 @@ from cairn.provenance.avb import (
     VbmetaImage,
     calculate_vbmeta_digest,
     load_vbmeta,
+    parse_footer,
     parse_vbmeta,
+    parse_vbmeta_image,
     verify_vbmeta_signature,
 )
 from cairn.provenance.hash_index import (
@@ -35,6 +40,8 @@ from cairn.provenance.hash_index import (
 __all__ = [
     "ALGORITHMS_BY_TYPE",
     "AVB_MAGIC",
+    "FOOTER_MAGIC",
+    "FOOTER_SIZE",
     "HEADER_SIZE",
     "MAX_INDEX_BYTES",
     "MAX_VBMETA_BYTES",
@@ -42,6 +49,7 @@ __all__ = [
     "AvbAlgorithm",
     "AvbChainPartition",
     "AvbError",
+    "AvbFooter",
     "AvbHashDescriptor",
     "AvbHashtreeDescriptor",
     "AvbHeader",
@@ -57,7 +65,9 @@ __all__ = [
     "calculate_vbmeta_digest",
     "load_hash_index",
     "load_vbmeta",
+    "parse_footer",
     "parse_vbmeta",
+    "parse_vbmeta_image",
     "verify_manifest",
     "verify_vbmeta_signature",
 ]

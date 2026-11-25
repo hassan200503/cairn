@@ -107,11 +107,12 @@ entries and nested archives, and can hash every entry with `--hash`. The `cairn
 provenance` command hashes a package and compares it with a local JSON index; a match
 is a signal, not a signature check. `cairn plan` emits a read-only vendor-order dry
 run with a canonical plan hash and refuses to mark it executable unless provenance is
-TRUE and every requested option is modeled. `cairn avb` parses a standalone or
-padded VBMeta image, computes the AOSP digest including supplied chained images,
-and verifies the RSA signature against the embedded key or an expected raw AVB
-public key. Embedded-key validity is not a trust anchor, and chain-of-trust and
-rollback are not checked yet. None of these commands writes to a device.
+TRUE and every requested option is modeled. `cairn avb` parses standalone, padded,
+or footer-embedded VBMeta images, computes the AOSP digest including supplied
+chained images, and verifies the RSA signature against the embedded key or an
+expected raw AVB public key. Embedded-key validity is not a trust anchor, and
+chain-of-trust and rollback are not checked yet. None of these commands writes to a
+device.
 
 ## Repository map
 
