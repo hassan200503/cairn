@@ -169,9 +169,11 @@ read-only, unified `PackageManifest`.
 **Accept:** golden fixtures for at least three vendor packages; unknown files are
 reported, not ignored; malformed archives fail closed.
 **Depends on:** T02, T04.
-**Status:** partial (2026-11-25). The AOSP v1 `fastboot-info.txt` grammar and full
-sparse-image validation are implemented with fail-closed deviations. Factory zip, OTA
-metadata, and the unified `PackageManifest` are pending.
+**Status:** partial (2026-11-25). The AOSP v1 `fastboot-info.txt` grammar, full
+sparse-image validation, factory/OTA zip inspection, OTA metadata, and the unified
+`PackageManifest` are implemented, with a read-only `cairn inspect`. Synthetic
+fixtures cover the parsers; golden fixtures for three real vendor packages are still
+required, and nested factory image zips are reported but not opened.
 
 ### T09 - Provenance and AVB chain verification
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 from pathlib import Path
 
 from cairn import __version__
@@ -115,3 +116,57 @@ def test_probe_missing_fastboot_is_a_usage_error(tmp_path, capsys) -> None:
     exit_code = main(["probe", "--fastboot", str(missing)])
     assert exit_code == EXIT_USAGE
     assert "not found" in capsys.readouterr().err
+
+
+def _write_factory_zip(path: Path) -> Path:
+    info = (TRANSCRIPT.parent / "fastboot-info.txt").read_text(encoding="utf-8")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("boot.img", b"boot")
+        archive.writestr("README.txt", b"readme")
+        archive.writestr("fastboot-info.txt", info)
+    return path
+
+
+def test_inspect_factory_package(tmp_path, capsys) -> None:
+    path = _write_factory_zip(tmp_path / "factory.zip")
+
+    exit_code = main(["inspect", str(path)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "kind: factory" in output
+    assert "fastboot-info: 16 commands" in output
+    assert "unknown entries:" in output
+    assert "README.txt" in output
+    assert "read-only" in output
+
+
+def test_inspect_json_with_hashes(tmp_path, capsys) -> None:
+    path = _write_factory_zip(tmp_path / "factory.zip")
+
+    exit_code = main(["inspect", str(path), "--json", "--hash"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["kind"] == "factory"
+    assert payload["archive_sha256"] is not None
+    boot = next(entry for entry in payload["entries"] if entry["name"] == "boot.img")
+    assert boot["sha256"] is not None
+    assert payload["issues"]["unknown_entries"] == ["README.txt"]
+
+
+def test_inspect_missing_package_fails(tmp_path, capsys) -> None:
+    exit_code = main(["inspect", str(tmp_path / "missing.zip")])
+
+    assert exit_code == EXIT_FAILED
+    assert "not found" in capsys.readouterr().err
+
+
+def test_inspect_malformed_package_fails(tmp_path, capsys) -> None:
+    path = tmp_path / "broken.zip"
+    path.write_bytes(b"not a zip")
+
+    exit_code = main(["inspect", str(path)])
+
+    assert exit_code == EXIT_FAILED
+    assert "cannot read package" in capsys.readouterr().err

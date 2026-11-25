@@ -30,6 +30,7 @@ unknown, the rule result is `UNKNOWN`, and `UNKNOWN` blocks.
 | KU-023 | OTA payload metadata fields for downgrade checks | Native-path safety | AOSP OTA docs, payload dumps, hardware | M2/M8 |
 | KU-024 | EDL programmer/DA matching rules per OEM | Assisted safety | Vendor docs, hardware findings | M10 |
 | KU-025 | EDL/MediaTek partition read-back reliability | V2 claims | Hardware tests | M10 |
+| KU-026 | Contents of nested factory image zips, where real Pixel packages may keep `fastboot-info.txt` | Factory manifests can be incomplete | Real packages, streaming nested-zip reader | M1/T08 |
 
 ---
 

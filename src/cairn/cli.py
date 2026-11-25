@@ -17,6 +17,7 @@ from cairn.core.evidence import EvidenceSource
 from cairn.core.tristate import Tri
 from cairn.core.verification import VerificationLevel
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
+from cairn.package.archive import PackageError, PackageManifest, load_package
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
@@ -106,6 +107,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit machine-readable output",
     )
 
+    inspect = subparsers.add_parser(
+        "inspect",
+        help="read-only package inspection (no extraction, no device access)",
+    )
+    inspect.add_argument("package", type=Path, help="factory or OTA zip")
+    inspect.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+    inspect.add_argument(
+        "--hash",
+        action="store_true",
+        help="hash every entry and the archive (reads all data)",
+    )
+
     return parser
 
 
@@ -131,6 +148,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "probe":
         return _run_probe(args)
+
+    if args.command == "inspect":
+        return _run_inspect(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -267,6 +287,60 @@ def _run_probe(args: argparse.Namespace) -> int:
         _print_probe(payload, result, simulated=simulated)
 
     return EXIT_OK if result.tool_ok else EXIT_FAILED
+
+
+def _run_inspect(args: argparse.Namespace) -> int:
+    try:
+        manifest = load_package(
+            args.package,
+            hash_files=args.hash,
+            hash_archive=args.hash,
+        )
+    except PackageError as exc:
+        print(f"cairn inspect: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(manifest.to_dict(), indent=2))
+    else:
+        _print_inspect(manifest)
+    return EXIT_OK
+
+
+def _print_inspect(manifest: PackageManifest) -> None:
+    print(f"package: {manifest.path}")
+    print(f"kind: {manifest.kind.value}")
+    print(f"archive: {manifest.archive_size} bytes")
+    if manifest.archive_sha256 is not None:
+        print(f"archive sha256: {manifest.archive_sha256}")
+
+    counts: dict[str, int] = {}
+    for entry in manifest.entries:
+        counts[entry.kind.value] = counts.get(entry.kind.value, 0) + 1
+    summary = ", ".join(f"{kind}={count}" for kind, count in sorted(counts.items()))
+    print(f"entries: {len(manifest.entries)}" + (f" ({summary})" if summary else ""))
+
+    if manifest.fastboot_info is not None:
+        print(
+            f"fastboot-info: {len(manifest.fastboot_info.commands)} commands "
+            f"(version {manifest.fastboot_info.version})"
+        )
+    if manifest.ota_metadata is not None:
+        pre_device = manifest.ota_metadata.first("pre-device") or "unknown"
+        print(
+            f"ota metadata: {len(manifest.ota_metadata.entries)} entries; pre-device={pre_device}"
+        )
+    if manifest.payload_properties is not None:
+        print(f"payload properties: {len(manifest.payload_properties)} keys")
+    if manifest.unknown_entries:
+        print("unknown entries:")
+        for name in manifest.unknown_entries:
+            print(f"  {name}")
+    if manifest.warnings:
+        print("warnings:")
+        for warning in manifest.warnings:
+            print(f"  {warning}")
+    print("read-only: archive was not extracted; no device access")
 
 
 def _resolve_fastboot(explicit: Path | None) -> Path | None:

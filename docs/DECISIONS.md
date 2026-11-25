@@ -208,3 +208,21 @@ The spec says this plainly.
 
 **Consequences.** No false security claims. Stronger host hardening is a separate
 workstream if ever needed.
+
+---
+
+## ADR-015 - Package archives are untrusted and never extracted
+
+**Context.** Factory and OTA packages are large, vendor-controlled zips. Extracting
+them creates a second mutable copy and exposes path traversal, duplicate names,
+symlinks, encryption, and zip bombs.
+
+**Decision.** Inspect archives in place. Reject unsafe names, duplicate entries,
+encrypted entries, symlinks, unsupported compression, and configured count/size
+overflows. Report unknown files; never silently ignore them. Nested archives are
+reported but not opened until a bounded streaming reader exists. OTA metadata is
+read-only and not signature-verified until T09/M8.
+
+**Consequences.** Real Pixel factory zips that keep `fastboot-info.txt` inside a
+nested image zip produce an incomplete manifest. No package is treated as verified
+from metadata alone.
