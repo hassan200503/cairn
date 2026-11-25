@@ -91,6 +91,7 @@ uv run cairn provenance <package.zip> --index <index.json>
 uv run cairn plan <package.zip> --index <index.json>
 uv run cairn avb info <vbmeta.img>
 uv run cairn avb digest <vbmeta.img> [--chain boot=<boot.img>]
+uv run cairn avb verify <vbmeta.img> [--key <key.avbpubkey>]
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
@@ -107,9 +108,10 @@ provenance` command hashes a package and compares it with a local JSON index; a 
 is a signal, not a signature check. `cairn plan` emits a read-only vendor-order dry
 run with a canonical plan hash and refuses to mark it executable unless provenance is
 TRUE and every requested option is modeled. `cairn avb` parses a standalone or
-padded VBMeta image and computes the AOSP digest, including supplied chained images;
-it does not verify RSA signatures or chain-of-trust yet. None of these commands
-writes to a device.
+padded VBMeta image, computes the AOSP digest including supplied chained images,
+and verifies the RSA signature against the embedded key or an expected raw AVB
+public key. Embedded-key validity is not a trust anchor, and chain-of-trust and
+rollback are not checked yet. None of these commands writes to a device.
 
 ## Repository map
 

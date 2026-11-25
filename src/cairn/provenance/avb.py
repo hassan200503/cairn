@@ -1,14 +1,16 @@
-"""Strict, read-only AVB VBMeta parsing.
+"""Strict, read-only AVB VBMeta parsing and signature checking.
 
-This module parses the VBMeta container and its descriptors. It does not verify
-RSA signatures or follow partition chains yet; those are separate gates. Parsing
-is intentionally fail-closed: unknown algorithms, inconsistent sizes, overlapping
+This module parses the VBMeta container and its descriptors and can check the
+VBMeta RSA signature against the embedded public key. It does not follow partition
+chains or establish a trust anchor; those are separate gates. Parsing is
+intentionally fail-closed: unknown algorithms, inconsistent sizes, overlapping
 blocks, and malformed descriptors are rejected.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import itertools
 import struct
 from collections.abc import Mapping
@@ -24,6 +26,11 @@ DESCRIPTOR_HEADER_SIZE: Final = 16
 MAX_VBMETA_BYTES: Final = 64 * 1024 * 1024
 MAX_DESCRIPTORS: Final = 4096
 _HASH_SIZES: Final[Mapping[str, int]] = {"sha256": 32, "sha512": 64}
+_RSA_EXPONENT: Final = 65537
+_DIGEST_INFO: Final[Mapping[str, bytes]] = {
+    "sha256": bytes.fromhex("3031300d060960864801650304020105000420"),
+    "sha512": bytes.fromhex("3051300d060960864801650304020305000440"),
+}
 _HEADER_STRUCT: Final = struct.Struct(">4s2L2QL2Q2Q2Q2Q2QQLL47sx80x")
 _DESCRIPTOR_HEADER_STRUCT: Final = struct.Struct(">QQ")
 _PROPERTY_STRUCT: Final = struct.Struct(">QQQQ")
@@ -246,6 +253,30 @@ type AvbDescriptor = (
 
 
 @dataclass(frozen=True, slots=True)
+class AvbSignature:
+    signed: bool
+    valid: bool | None
+    algorithm: AvbAlgorithm
+    key_sha256: str
+    stored_digest: bytes
+    computed_digest: bytes
+    reason: str
+    expected_key_sha256: str | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "signed": self.signed,
+            "valid": self.valid,
+            "algorithm": self.algorithm.name,
+            "key_sha256": self.key_sha256,
+            "expected_key_sha256": self.expected_key_sha256,
+            "stored_digest_hex": self.stored_digest.hex(),
+            "computed_digest_hex": self.computed_digest.hex(),
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VbmetaImage:
     header: AvbHeader
     descriptors: tuple[AvbDescriptor, ...]
@@ -392,6 +423,154 @@ def load_vbmeta(path: Path, *, max_bytes: int = MAX_VBMETA_BYTES) -> VbmetaImage
         trailing_bytes=image.trailing_bytes,
         source=path,
     )
+
+
+def verify_vbmeta_signature(
+    image: VbmetaImage,
+    *,
+    expected_key: bytes | None = None,
+) -> AvbSignature:
+    """Check the VBMeta signature against the embedded public key.
+
+    A valid result only proves that the signature matches the embedded key. It is
+    not a trust anchor: the caller must still compare the key with an expected
+    key or a verified chain before treating the image as authentic.
+    """
+    header = image.header
+    algorithm = header.algorithm
+    auth_start = HEADER_SIZE
+    aux_start = auth_start + header.authentication_data_block_size
+    aux_end = aux_start + header.auxiliary_data_block_size
+    key_start = aux_start + header.public_key_offset
+    key_end = key_start + header.public_key_size
+    key_blob = image.blob[key_start:key_end]
+    key_sha256 = hashlib.sha256(key_blob).hexdigest()
+    expected_key_sha256 = None if expected_key is None else hashlib.sha256(expected_key).hexdigest()
+
+    if algorithm.algorithm_type == 0:
+        if expected_key is not None:
+            return AvbSignature(
+                signed=False,
+                valid=False,
+                algorithm=algorithm,
+                key_sha256=key_sha256,
+                stored_digest=b"",
+                computed_digest=b"",
+                reason="unsigned VBMeta cannot match an expected key",
+                expected_key_sha256=expected_key_sha256,
+            )
+        return AvbSignature(
+            signed=False,
+            valid=None,
+            algorithm=algorithm,
+            key_sha256=key_sha256,
+            stored_digest=b"",
+            computed_digest=b"",
+            reason="unsigned VBMeta (algorithm NONE)",
+        )
+
+    if expected_key is not None and key_blob != expected_key:
+        return AvbSignature(
+            signed=True,
+            valid=False,
+            algorithm=algorithm,
+            key_sha256=key_sha256,
+            stored_digest=b"",
+            computed_digest=b"",
+            reason="embedded public key does not match the expected key",
+            expected_key_sha256=expected_key_sha256,
+        )
+
+    stored_digest = _auth_slice(image, header.hash_offset, header.hash_size)
+    stored_signature = _auth_slice(image, header.signature_offset, header.signature_size)
+    hasher = hashlib.new(algorithm.hash_name)
+    hasher.update(image.blob[:HEADER_SIZE])
+    hasher.update(image.blob[aux_start:aux_end])
+    computed_digest = hasher.digest()
+
+    if not hmac.compare_digest(computed_digest, stored_digest):
+        return AvbSignature(
+            signed=True,
+            valid=False,
+            algorithm=algorithm,
+            key_sha256=key_sha256,
+            stored_digest=stored_digest,
+            computed_digest=computed_digest,
+            reason="stored VBMeta digest does not match the header and auxiliary data",
+            expected_key_sha256=expected_key_sha256,
+        )
+
+    modulus = _decode_rsa_modulus(key_blob, algorithm)
+    signature = int.from_bytes(stored_signature, "big")
+    if signature >= modulus:
+        return AvbSignature(
+            signed=True,
+            valid=False,
+            algorithm=algorithm,
+            key_sha256=key_sha256,
+            stored_digest=stored_digest,
+            computed_digest=computed_digest,
+            reason="signature is not a valid RSA value for the embedded key",
+            expected_key_sha256=expected_key_sha256,
+        )
+
+    digest_info = _DIGEST_INFO[algorithm.hash_name]
+    padding_size = algorithm.signature_size - 3 - len(digest_info) - len(computed_digest)
+    if padding_size < 8:
+        raise AvbError(f"{algorithm.name} cannot fit the required RSA padding")
+    expected = b"\x00\x01" + b"\xff" * padding_size + b"\x00" + digest_info + computed_digest
+    recovered = pow(signature, _RSA_EXPONENT, modulus).to_bytes(algorithm.signature_size, "big")
+    if not hmac.compare_digest(recovered, expected):
+        return AvbSignature(
+            signed=True,
+            valid=False,
+            algorithm=algorithm,
+            key_sha256=key_sha256,
+            stored_digest=stored_digest,
+            computed_digest=computed_digest,
+            reason="RSA signature does not match the embedded public key",
+            expected_key_sha256=expected_key_sha256,
+        )
+
+    if expected_key is None:
+        reason = "signature matches the embedded key (not a trust anchor)"
+    else:
+        reason = "signature matches the embedded key and the expected key"
+    return AvbSignature(
+        signed=True,
+        valid=True,
+        algorithm=algorithm,
+        key_sha256=key_sha256,
+        stored_digest=stored_digest,
+        computed_digest=computed_digest,
+        reason=reason,
+        expected_key_sha256=expected_key_sha256,
+    )
+
+
+def _auth_slice(image: VbmetaImage, offset: int, size: int) -> bytes:
+    start = HEADER_SIZE + offset
+    return image.blob[start : start + size]
+
+
+def _decode_rsa_modulus(key_blob: bytes, algorithm: AvbAlgorithm) -> int:
+    if len(key_blob) != algorithm.public_key_size:
+        raise AvbError(
+            f"{algorithm.name} public key is {len(key_blob)} bytes, "
+            f"expected {algorithm.public_key_size}"
+        )
+    num_bits, _n0inv = struct.unpack_from(">II", key_blob, 0)
+    if num_bits != algorithm.signature_size * 8:
+        raise AvbError(
+            f"public key declares {num_bits} bits, expected {algorithm.signature_size * 8}"
+        )
+    key_bytes = num_bits // 8
+    modulus = int.from_bytes(key_blob[8 : 8 + key_bytes], "big")
+    if modulus <= 0 or modulus % 2 == 0:
+        raise AvbError("public key modulus is not a positive odd integer")
+    if modulus.bit_length() > num_bits:
+        raise AvbError("public key modulus exceeds its declared bit length")
+    return modulus
 
 
 def calculate_vbmeta_digest(

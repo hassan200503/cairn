@@ -13,11 +13,13 @@ from cairn.provenance.avb import (
     AvbHeader,
     AvbKernelCmdline,
     AvbProperty,
+    AvbSignature,
     AvbUnknownDescriptor,
     VbmetaImage,
     calculate_vbmeta_digest,
     load_vbmeta,
     parse_vbmeta,
+    verify_vbmeta_signature,
 )
 from cairn.provenance.hash_index import (
     MAX_INDEX_BYTES,
@@ -45,6 +47,7 @@ __all__ = [
     "AvbHeader",
     "AvbKernelCmdline",
     "AvbProperty",
+    "AvbSignature",
     "AvbUnknownDescriptor",
     "HashIndex",
     "HashIndexError",
@@ -56,4 +59,5 @@ __all__ = [
     "load_vbmeta",
     "parse_vbmeta",
     "verify_manifest",
+    "verify_vbmeta_signature",
 ]

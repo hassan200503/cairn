@@ -185,13 +185,15 @@ per-location rollback indexes are handled; unknown package is Assisted, not Veri
 **Status:** partial (2026-11-25). The offline vendor hash index and `cairn provenance`
 are implemented with strict schema validation, archive/entry hash comparison, and
 tri-state results; a local index match is explicitly not a signature check. A strict
-read-only VBMeta parser (`provenance/avb.py`) and `cairn avb info|digest` now parse
-standalone or padded VBMeta headers and hash, hashtree, chain, property, and kernel
-cmdline descriptors, and compute the AOSP digest from supplied chained images; an
-AOSP avbtool-generated fixture validates the parser. Parsing is not verification:
-RSA signature checks, chain-of-trust key matching, footer-embedded VBMeta,
-per-location rollback handling, and the Pixel verifier oracle are pending, along
-with real vendor hashes.
+read-only VBMeta parser (`provenance/avb.py`) and `cairn avb info|digest|verify`
+now parse standalone or padded VBMeta headers and hash, hashtree, chain, property,
+and kernel cmdline descriptors, compute the AOSP digest from supplied chained
+images, and verify the VBMeta RSA signature against the embedded key with an
+optional expected raw AVB public key. AOSP avbtool-generated unsigned and signed
+fixtures validate the parser, and the signed fixture was cross-checked with
+`openssl` raw RSA recovery. Embedded-key validity is not a trust anchor:
+chain-of-trust key matching, footer-embedded VBMeta, per-location rollback
+handling, and the Pixel verifier oracle are pending, along with real vendor hashes.
 
 ### T10 - Planner v0 and dry run
 

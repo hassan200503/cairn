@@ -276,3 +276,20 @@ verified. Parse success never yields TRUE for SR-003 or SR-004.
 **Consequences.** The parser is useful for inspection and oracle comparisons before
 signature support lands, but it cannot authorize a write or contribute to Verified
 status on its own.
+
+---
+
+## ADR-019 - Embedded-key signature validity is not trust
+
+**Context.** A VBMeta signature can verify against the public key embedded in the
+same image. An attacker can re-sign a modified image with a new key, so this only
+proves internal consistency.
+
+**Decision.** Report embedded-key signature validity as a self-consistency result,
+never as authenticity. `cairn avb verify` exits 0 only for a valid signature, but
+its output always says the embedded key is not a trust anchor. Authenticity requires
+an expected key, a verified chain, or a device-bound key check, and those remain
+separate gates. An unsigned image is UNKNOWN, not valid.
+
+**Consequences.** The verifier is useful for corruption and oracle tests now, but
+SR-003 stays UNKNOWN until chain-of-trust or lock-state key checks land.

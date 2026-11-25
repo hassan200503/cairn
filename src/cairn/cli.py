@@ -33,10 +33,12 @@ from cairn.provenance.avb import (
     AvbHashtreeDescriptor,
     AvbKernelCmdline,
     AvbProperty,
+    AvbSignature,
     AvbUnknownDescriptor,
     VbmetaImage,
     calculate_vbmeta_digest,
     load_vbmeta,
+    verify_vbmeta_signature,
 )
 from cairn.provenance.hash_index import (
     HashIndexError,
@@ -231,6 +233,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME=PATH",
         help="chained partition image; repeat for multiple chains",
+    )
+    avb_verify = avb_sub.add_parser(
+        "verify",
+        help="verify the VBMeta RSA signature against its embedded key",
+    )
+    avb_verify.add_argument("image", type=Path, help="VBMeta image")
+    avb_verify.add_argument(
+        "--key",
+        type=Path,
+        metavar="AVBPUBKEY",
+        help="expected raw AVB public key; without it the embedded key is only self-consistent",
+    )
+    avb_verify.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
     )
 
     return parser
@@ -594,7 +612,9 @@ def _run_avb(args: argparse.Namespace) -> int:
         return _run_avb_info(args)
     if args.avb_command == "digest":
         return _run_avb_digest(args)
-    print("cairn avb: choose 'info' or 'digest'", file=sys.stderr)
+    if args.avb_command == "verify":
+        return _run_avb_verify(args)
+    print("cairn avb: choose 'info', 'digest', or 'verify'", file=sys.stderr)
     return EXIT_USAGE
 
 
@@ -640,6 +660,59 @@ def _run_avb_digest(args: argparse.Namespace) -> int:
 
     print(digest)
     return EXIT_OK
+
+
+def _run_avb_verify(args: argparse.Namespace) -> int:
+    try:
+        image = load_vbmeta(args.image)
+        expected_key = None if args.key is None else _read_avb_key(args.key)
+        result = verify_vbmeta_signature(image, expected_key=expected_key)
+    except AvbError as exc:
+        print(f"cairn avb verify: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        _print_signature(result)
+
+    if result.valid is True:
+        return EXIT_OK
+    if result.valid is False:
+        return EXIT_FAILED
+    return EXIT_UNKNOWN
+
+
+def _read_avb_key(path: Path) -> bytes:
+    if not path.is_file():
+        raise AvbError(f"AVB public key not found at {path}")
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise AvbError(f"cannot read AVB public key {path}: {exc}") from exc
+    if not data:
+        raise AvbError(f"AVB public key at {path} is empty")
+    if len(data) > 8192:
+        raise AvbError(f"AVB public key at {path} is above the 8192-byte limit")
+    return data
+
+
+def _print_signature(result: AvbSignature) -> None:
+    print(f"algorithm: {result.algorithm.name}")
+    if not result.signed:
+        print("signature: unsigned; not verified")
+    elif result.valid:
+        print(f"signature: valid ({result.reason})")
+    else:
+        print(f"signature: INVALID ({result.reason})")
+    if result.signed:
+        print(f"key sha256: {result.key_sha256}")
+        if result.expected_key_sha256 is not None:
+            print(f"expected key sha256: {result.expected_key_sha256}")
+        print(f"stored digest: {result.stored_digest.hex()}")
+        print(f"computed digest: {result.computed_digest.hex()}")
+    print("note: chain-of-trust and rollback are not checked")
+    print("read-only: no device access")
 
 
 def _print_vbmeta(image: VbmetaImage) -> None:

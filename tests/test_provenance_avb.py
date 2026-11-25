@@ -19,6 +19,7 @@ from cairn.provenance.avb import (
     calculate_vbmeta_digest,
     load_vbmeta,
     parse_vbmeta,
+    verify_vbmeta_signature,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "unsigned_vbmeta.img"
@@ -394,3 +395,83 @@ def test_vbmeta_to_dict_is_json_serializable() -> None:
     assert '"cmdline": "androidboot.test=1"' in encoded
     assert '"source"' in encoded
     assert AvbProperty("k", b"v").to_dict()["value_text"] == "v"
+
+
+SIGNED_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.img"
+SIGNED_KEY = Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.avbpubkey"
+
+
+def test_verify_signature_matches_embedded_key() -> None:
+    result = verify_vbmeta_signature(load_vbmeta(SIGNED_FIXTURE))
+
+    assert result.signed is True
+    assert result.valid is True
+    assert result.algorithm.name == "SHA256_RSA2048"
+    assert result.stored_digest == result.computed_digest
+    assert "not a trust anchor" in result.reason
+
+
+def test_verify_signature_with_expected_key() -> None:
+    result = verify_vbmeta_signature(
+        load_vbmeta(SIGNED_FIXTURE),
+        expected_key=SIGNED_KEY.read_bytes(),
+    )
+
+    assert result.valid is True
+    assert result.expected_key_sha256 == result.key_sha256
+
+
+def test_verify_signature_rejects_wrong_expected_key() -> None:
+    wrong_key = bytearray(SIGNED_KEY.read_bytes())
+    wrong_key[-1] ^= 1
+
+    result = verify_vbmeta_signature(
+        load_vbmeta(SIGNED_FIXTURE),
+        expected_key=bytes(wrong_key),
+    )
+
+    assert result.signed is True
+    assert result.valid is False
+    assert "does not match the expected key" in result.reason
+
+
+def test_verify_signature_rejects_tampered_descriptor() -> None:
+    data = bytearray(SIGNED_FIXTURE.read_bytes())
+    value_offset = data.index(b"test-value")
+    data[value_offset] ^= 1
+
+    result = verify_vbmeta_signature(parse_vbmeta(bytes(data)))
+
+    assert result.valid is False
+    assert "stored VBMeta digest" in result.reason
+
+
+def test_verify_signature_rejects_tampered_signature() -> None:
+    image = load_vbmeta(SIGNED_FIXTURE)
+    data = bytearray(image.blob)
+    signature_offset = 256 + image.header.signature_offset
+    data[signature_offset] ^= 1
+
+    result = verify_vbmeta_signature(parse_vbmeta(bytes(data)))
+
+    assert result.valid is False
+    assert "RSA signature" in result.reason
+
+
+def test_verify_unsigned_image_is_unknown() -> None:
+    result = verify_vbmeta_signature(load_vbmeta(FIXTURE))
+
+    assert result.signed is False
+    assert result.valid is None
+    assert "unsigned" in result.reason
+
+
+def test_verify_unsigned_image_cannot_match_expected_key() -> None:
+    result = verify_vbmeta_signature(
+        load_vbmeta(FIXTURE),
+        expected_key=SIGNED_KEY.read_bytes(),
+    )
+
+    assert result.signed is False
+    assert result.valid is False
+    assert "cannot match an expected key" in result.reason

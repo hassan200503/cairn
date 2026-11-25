@@ -393,6 +393,8 @@ def test_plan_retrofit_force_is_not_executable(tmp_path, capsys) -> None:
 
 
 AVB_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "unsigned_vbmeta.img"
+SIGNED_AVB_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.img"
+SIGNED_AVB_KEY = Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.avbpubkey"
 
 
 def test_avb_info_fixture(capsys) -> None:
@@ -452,7 +454,7 @@ def test_avb_digest_malformed_chain_is_usage_error(capsys) -> None:
 
 def test_avb_without_subcommand_is_usage_error(capsys) -> None:
     assert main(["avb"]) == EXIT_USAGE
-    assert "choose 'info' or 'digest'" in capsys.readouterr().err
+    assert "choose 'info', 'digest', or 'verify'" in capsys.readouterr().err
 
 
 def test_avb_malformed_image_fails(tmp_path, capsys) -> None:
@@ -461,3 +463,73 @@ def test_avb_malformed_image_fails(tmp_path, capsys) -> None:
 
     assert main(["avb", "info", str(image)]) == EXIT_FAILED
     assert "magic" in capsys.readouterr().err
+
+
+def test_avb_verify_signed_fixture(capsys) -> None:
+    exit_code = main(["avb", "verify", str(SIGNED_AVB_FIXTURE)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "signature: valid" in output
+    assert "not a trust anchor" in output
+    assert "chain-of-trust and rollback are not checked" in output
+
+
+def test_avb_verify_signed_json(capsys) -> None:
+    exit_code = main(["avb", "verify", str(SIGNED_AVB_FIXTURE), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["signed"] is True
+    assert payload["valid"] is True
+    assert payload["algorithm"] == "SHA256_RSA2048"
+    assert len(payload["key_sha256"]) == 64
+
+
+def test_avb_verify_expected_key(capsys) -> None:
+    exit_code = main(["avb", "verify", str(SIGNED_AVB_FIXTURE), "--key", str(SIGNED_AVB_KEY)])
+
+    assert exit_code == EXIT_OK
+    assert "expected key" in capsys.readouterr().out
+
+
+def test_avb_verify_wrong_expected_key_fails(tmp_path, capsys) -> None:
+    wrong_key = tmp_path / "wrong.avbpubkey"
+    wrong_key.write_bytes(SIGNED_AVB_KEY.read_bytes()[:-1] + b"\x00")
+
+    exit_code = main(["avb", "verify", str(SIGNED_AVB_FIXTURE), "--key", str(wrong_key)])
+
+    assert exit_code == EXIT_FAILED
+    assert "INVALID" in capsys.readouterr().out
+
+
+def test_avb_verify_tampered_image_fails(tmp_path, capsys) -> None:
+    data = bytearray(SIGNED_AVB_FIXTURE.read_bytes())
+    data[data.index(b"test-value")] ^= 1
+    tampered = tmp_path / "tampered.img"
+    tampered.write_bytes(data)
+
+    assert main(["avb", "verify", str(tampered)]) == EXIT_FAILED
+    assert "stored VBMeta digest" in capsys.readouterr().out
+
+
+def test_avb_verify_unsigned_is_unknown(capsys) -> None:
+    exit_code = main(["avb", "verify", str(AVB_FIXTURE)])
+
+    assert exit_code == EXIT_UNKNOWN
+    assert "unsigned" in capsys.readouterr().out
+
+
+def test_avb_verify_missing_key_fails(tmp_path, capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "verify",
+            str(SIGNED_AVB_FIXTURE),
+            "--key",
+            str(tmp_path / "missing.avbpubkey"),
+        ]
+    )
+
+    assert exit_code == EXIT_FAILED
+    assert "not found" in capsys.readouterr().err
