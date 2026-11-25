@@ -241,3 +241,21 @@ never overridable. The CLI says plainly that a match is not a signature check.
 
 **Consequences.** Shops can pin known packages without a network, but the index must
 later be signed and rotated (M11) before it can contribute to Verified status.
+
+---
+
+## ADR-017 - Planner v0 never reorders or guesses
+
+**Context.** Vendor `fastboot-info.txt` order is the baseline, but slot resolution,
+retrofit force mode, and fallback behavior are not yet verified per device.
+
+**Decision.** Preserve vendor order exactly. Emit every skipped if-wipe command as a
+deviation. A plan is executable only when provenance is TRUE, the package structure is
+understood, every image is present, and requested options are modeled. Unmodeled slot
+or retrofit requests produce an explicit non-executable dry run. The fallback is
+stop-and-reprobe, not a speculative flash sequence. The plan hash covers the canonical
+plan payload.
+
+**Consequences.** The planner is useful for dry runs before slot/retrofit facts exist,
+but it cannot authorize a write. Executable plans still require the safety engine and
+approval binding.

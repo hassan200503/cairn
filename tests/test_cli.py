@@ -272,3 +272,121 @@ def test_provenance_missing_index_fails(tmp_path, capsys) -> None:
 
     assert exit_code == EXIT_FAILED
     assert "not found" in capsys.readouterr().err
+
+
+def _write_plan_package(path: Path) -> Path:
+    info = (
+        "version 1\n"
+        "flash bootloader bootloader.img\n"
+        "flash boot boot.img\n"
+        "if-wipe erase metadata\n"
+        "reboot fastboot\n"
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("bootloader.img", b"bootloader")
+        archive.writestr("boot.img", b"boot")
+        archive.writestr("fastboot-info.txt", info)
+    return path
+
+
+def test_plan_dry_run(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["plan", str(package), "--index", str(index)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "plan:" in output
+    assert "executable: TRUE" in output
+    assert "steps: 3" in output
+    assert "read-only dry run" in output
+
+
+def test_plan_wipe_includes_erase(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["plan", str(package), "--index", str(index), "--wipe"])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "steps: 4" in output
+    assert "erase metadata" in output
+
+
+def test_plan_json_is_machine_readable(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["plan", str(package), "--index", str(index), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["executable"] is True
+    assert len(payload["plan_sha256"]) == 64
+    assert len(payload["steps"]) == 3
+
+
+def test_plan_hash_is_stable_across_runs(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    assert main(["plan", str(package), "--index", str(index), "--json"]) == EXIT_OK
+    first = json.loads(capsys.readouterr().out)["plan_sha256"]
+    assert main(["plan", str(package), "--index", str(index), "--json"]) == EXIT_OK
+    second = json.loads(capsys.readouterr().out)["plan_sha256"]
+
+    assert first == second
+
+
+def test_plan_unknown_package_is_not_executable(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+    other = tmp_path / "other.zip"
+    with zipfile.ZipFile(other, "w") as archive:
+        archive.writestr("boot.img", b"different")
+        archive.writestr("fastboot-info.txt", "version 1\nflash boot boot.img\n")
+
+    exit_code = main(["plan", str(other), "--index", str(index)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "executable: FALSE" in output
+    assert "not in the local index" in output
+
+
+def test_plan_missing_fastboot_info_fails(tmp_path, capsys) -> None:
+    package = tmp_path / "factory.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("boot.img", b"boot")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["plan", str(package), "--index", str(index)])
+
+    assert exit_code == EXIT_FAILED
+    assert "no fastboot-info" in capsys.readouterr().err
+
+
+def test_plan_slot_other_is_not_executable(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["plan", str(package), "--index", str(index), "--slot", "other"])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "executable: FALSE" in output
+    assert "requires verified slot facts" in output
+
+
+def test_plan_retrofit_force_is_not_executable(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+
+    exit_code = main(["plan", str(package), "--index", str(index), "--retrofit-force"])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "executable: FALSE" in output
+    assert "retrofit force" in output

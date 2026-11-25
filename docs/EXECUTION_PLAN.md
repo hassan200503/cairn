@@ -195,6 +195,12 @@ fallback plan, plan hash, human-readable dry run.
 **Accept:** golden plans for five device/package pairs; every deviation from vendor
 order is annotated; brute-force equivalence on marked commutation groups.
 **Depends on:** T08.
+**Status:** partial (2026-11-25). Planner v0 preserves vendor order, applies wipe
+filtering, annotates critical writes, computes a canonical plan hash, and emits a
+stop-and-reprobe fallback. A plan is executable only when provenance is TRUE, the
+package is understood, images are present, and slot/retrofit options are modeled.
+Slot facts, retrofit force semantics, commutation data, and five real golden plans
+are pending.
 
 ### T11 - Safety engine v0
 

@@ -41,6 +41,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Offline vendor hash index and `cairn provenance`: strict JSON schema, duplicate and
   unsafe-name rejection, archive/entry SHA-256 comparison, tri-state result, and an
   explicit warning that a local index match is not a signature check.
+- Read-only planner v0 and `cairn plan`: preserves vendor order, filters if-wipe
+  commands with deviations, annotates critical writes, hashes the canonical plan,
+  and refuses to mark a plan executable without TRUE provenance and modeled options.
+  The fallback is stop-and-reprobe, not a speculative flash sequence.
 - Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
   inferred/stale refusal, verified JSON serialization, and property tests.
 - Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,

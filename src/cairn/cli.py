@@ -18,6 +18,14 @@ from cairn.core.tristate import Tri
 from cairn.core.verification import VerificationLevel
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
 from cairn.package.archive import PackageError, PackageManifest, load_package
+from cairn.plan.planner import (
+    Plan,
+    PlanError,
+    PlanOptions,
+    PlanStep,
+    SlotPolicy,
+    build_plan,
+)
 from cairn.provenance.hash_index import (
     HashIndexError,
     ProvenanceResult,
@@ -146,6 +154,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit machine-readable output",
     )
 
+    plan = subparsers.add_parser(
+        "plan",
+        help="build a read-only vendor-order flash plan (dry run)",
+    )
+    plan.add_argument("package", type=Path, help="factory or OTA zip")
+    plan.add_argument(
+        "--index",
+        type=Path,
+        required=True,
+        help="local hash-index JSON",
+    )
+    plan.add_argument(
+        "--wipe",
+        action="store_true",
+        help="include vendor if-wipe commands",
+    )
+    plan.add_argument(
+        "--slot",
+        choices=[policy.value for policy in SlotPolicy],
+        default=SlotPolicy.CURRENT.value,
+        help="slot policy (non-current policies need verified slot facts)",
+    )
+    plan.add_argument(
+        "--retrofit-force",
+        action="store_true",
+        help="request the unmodeled retrofit force case (plan will not be executable)",
+    )
+    plan.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
     return parser
 
 
@@ -177,6 +218,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "provenance":
         return _run_provenance(args)
+
+    if args.command == "plan":
+        return _run_plan(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -425,6 +469,75 @@ def _print_provenance(
         print(f"  {reason}")
     print("note: a local index match is not a signature or authenticity check")
     print("read-only: no device access")
+
+
+def _run_plan(args: argparse.Namespace) -> int:
+    try:
+        index = load_hash_index(args.index)
+        manifest = load_package(
+            args.package,
+            hash_files=True,
+            hash_archive=True,
+        )
+        provenance = verify_manifest(index, manifest)
+        plan = build_plan(
+            manifest,
+            provenance,
+            options=PlanOptions(
+                wipe=args.wipe,
+                slot_policy=SlotPolicy(args.slot),
+                retrofit_force=args.retrofit_force,
+            ),
+        )
+    except (HashIndexError, PackageError, PlanError) as exc:
+        print(f"cairn plan: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(plan.to_dict(), indent=2))
+    else:
+        _print_plan(plan)
+    return EXIT_OK if plan.executable else EXIT_UNKNOWN
+
+
+def _print_plan(plan: Plan) -> None:
+    print(f"plan: {plan.plan_sha256}")
+    print(f"package sha256: {plan.package_sha256}")
+    print(f"provenance: {plan.provenance.state.name}")
+    for reason in plan.provenance.reasons:
+        print(f"  provenance: {reason}")
+    print(
+        "options: "
+        f"wipe={'yes' if plan.options.wipe else 'no'}, "
+        f"slot={plan.options.slot_policy.value}, "
+        f"retrofit_force={'yes' if plan.options.retrofit_force else 'no'}"
+    )
+    print(f"executable: {'TRUE' if plan.executable else 'FALSE'}")
+    print(f"steps: {len(plan.steps)}")
+    for step in plan.steps:
+        print(f"  {step.number}. {_step_summary(step)} (line {step.source_line})")
+        for annotation in step.annotations:
+            print(f"     - {annotation}")
+    if plan.deviations:
+        print("deviations:")
+        for deviation in plan.deviations:
+            print(f"  - {deviation}")
+    if plan.warnings:
+        print("warnings:")
+        for warning in plan.warnings:
+            print(f"  - {warning}")
+    print(f"fallback: {plan.fallback.action} - {plan.fallback.detail}")
+    print("read-only dry run; no device writes")
+
+
+def _step_summary(step: PlanStep) -> str:
+    if step.action.value == "flash":
+        return f"flash {step.partition} {step.image}"
+    if step.action.value == "erase":
+        return f"erase {step.partition}"
+    if step.action.value == "reboot":
+        return f"reboot {step.target}"
+    return "update-super"
 
 
 def _resolve_fastboot(explicit: Path | None) -> Path | None:
