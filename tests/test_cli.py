@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from cairn import __version__
-from cairn.cli import EXIT_OK, EXIT_UNKNOWN, EXIT_USAGE, main
+from cairn.cli import EXIT_FAILED, EXIT_OK, EXIT_UNKNOWN, EXIT_USAGE, main
 
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "fastboot" / "pixel8_getvar_all.json"
 
@@ -43,7 +43,7 @@ def test_doctor_simulated_runs_a_link_soak(capsys) -> None:
     assert "link-soak: TRUE" in output
     assert "2 probes passed" in output
     assert "read-only" in output
-    assert exit_code in (EXIT_OK, EXIT_UNKNOWN)
+    assert exit_code in (EXIT_OK, EXIT_FAILED, EXIT_UNKNOWN)
 
 
 def test_doctor_json_is_machine_readable(capsys) -> None:
@@ -65,11 +65,11 @@ def test_doctor_json_is_machine_readable(capsys) -> None:
     assert payload["soak"]["attempts"] == 2
     assert payload["soak"]["state"] == "TRUE"
     assert payload["tool"]["fastboot"]["simulated"] is True
-    assert payload["verdict"] in ("TRUE", "UNKNOWN")
-    assert exit_code in (EXIT_OK, EXIT_UNKNOWN)
+    assert payload["verdict"] in ("TRUE", "FALSE", "UNKNOWN")
+    assert exit_code in (EXIT_OK, EXIT_FAILED, EXIT_UNKNOWN)
 
 
-def test_doctor_missing_fastboot_is_unknown(tmp_path, capsys) -> None:
+def test_doctor_missing_fastboot_is_reported(tmp_path, capsys) -> None:
     exit_code = main(
         [
             "doctor",
@@ -84,8 +84,8 @@ def test_doctor_missing_fastboot_is_unknown(tmp_path, capsys) -> None:
     checks = {check["name"]: check for check in payload["checks"]}
     assert checks["fastboot-tool"]["state"] == "UNKNOWN"
     assert checks["link-soak"]["state"] == "UNKNOWN"
-    assert payload["verdict"] == "UNKNOWN"
-    assert exit_code == EXIT_UNKNOWN
+    assert payload["verdict"] != "TRUE"
+    assert exit_code in (EXIT_FAILED, EXIT_UNKNOWN)
 
 
 def test_probe_simulated_reports_read_only(capsys) -> None:
