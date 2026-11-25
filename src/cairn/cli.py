@@ -26,6 +26,18 @@ from cairn.plan.planner import (
     SlotPolicy,
     build_plan,
 )
+from cairn.provenance.avb import (
+    AvbChainPartition,
+    AvbError,
+    AvbHashDescriptor,
+    AvbHashtreeDescriptor,
+    AvbKernelCmdline,
+    AvbProperty,
+    AvbUnknownDescriptor,
+    VbmetaImage,
+    calculate_vbmeta_digest,
+    load_vbmeta,
+)
 from cairn.provenance.hash_index import (
     HashIndexError,
     ProvenanceResult,
@@ -187,6 +199,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit machine-readable output",
     )
 
+    avb = subparsers.add_parser(
+        "avb",
+        help="read-only AVB VBMeta inspection (no signature verification)",
+    )
+    avb_sub = avb.add_subparsers(dest="avb_command", metavar="subcommand")
+    avb_info = avb_sub.add_parser(
+        "info",
+        help="print the VBMeta header and descriptors",
+    )
+    avb_info.add_argument("image", type=Path, help="VBMeta image")
+    avb_info.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+    avb_digest = avb_sub.add_parser(
+        "digest",
+        help="compute the AOSP VBMeta digest",
+    )
+    avb_digest.add_argument("image", type=Path, help="VBMeta image")
+    avb_digest.add_argument(
+        "--hash",
+        choices=("sha256", "sha512"),
+        default="sha256",
+        help="digest hash algorithm (default sha256)",
+    )
+    avb_digest.add_argument(
+        "--chain",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="chained partition image; repeat for multiple chains",
+    )
+
     return parser
 
 
@@ -221,6 +267,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "plan":
         return _run_plan(args)
+
+    if args.command == "avb":
+        return _run_avb(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -538,6 +587,102 @@ def _step_summary(step: PlanStep) -> str:
     if step.action.value == "reboot":
         return f"reboot {step.target}"
     return "update-super"
+
+
+def _run_avb(args: argparse.Namespace) -> int:
+    if args.avb_command == "info":
+        return _run_avb_info(args)
+    if args.avb_command == "digest":
+        return _run_avb_digest(args)
+    print("cairn avb: choose 'info' or 'digest'", file=sys.stderr)
+    return EXIT_USAGE
+
+
+def _run_avb_info(args: argparse.Namespace) -> int:
+    try:
+        image = load_vbmeta(args.image)
+    except AvbError as exc:
+        print(f"cairn avb info: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(image.to_dict(), indent=2))
+    else:
+        _print_vbmeta(image)
+    return EXIT_OK
+
+
+def _run_avb_digest(args: argparse.Namespace) -> int:
+    chain: dict[str, VbmetaImage] = {}
+    for spec in args.chain:
+        name, separator, path_text = spec.partition("=")
+        if not separator or not name or not path_text:
+            print(
+                f"cairn avb digest: malformed --chain {spec!r}; use NAME=PATH",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        if name in chain:
+            print(f"cairn avb digest: duplicate chain {name!r}", file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            chain[name] = load_vbmeta(Path(path_text))
+        except AvbError as exc:
+            print(f"cairn avb digest: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+
+    try:
+        image = load_vbmeta(args.image)
+        digest = calculate_vbmeta_digest(image, hash_name=args.hash, chain=chain)
+    except AvbError as exc:
+        print(f"cairn avb digest: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    print(digest)
+    return EXIT_OK
+
+
+def _print_vbmeta(image: VbmetaImage) -> None:
+    header = image.header
+    source = image.source if image.source is not None else "(memory)"
+    print(f"image: {source}")
+    trailing = f" (+{image.trailing_bytes} trailing bytes)" if image.trailing_bytes else ""
+    print(f"size: {len(image.blob)} bytes{trailing}")
+    print(f"algorithm: {header.algorithm.name}")
+    print(f"version: {header.required_libavb_version_major}.{header.required_libavb_version_minor}")
+    print(f"rollback index: {header.rollback_index}")
+    print(f"rollback index location: {header.rollback_index_location}")
+    print(f"flags: {header.flags}")
+    print(f"release: {header.release_string}")
+    print(f"descriptors: {len(image.descriptors)}")
+    for descriptor in image.descriptors:
+        if isinstance(descriptor, AvbProperty):
+            print(f"  property {descriptor.key} = {descriptor.value!r}")
+        elif isinstance(descriptor, AvbHashDescriptor):
+            print(
+                f"  hash {descriptor.partition_name}: {descriptor.image_size} bytes, "
+                f"{descriptor.hash_algorithm}, digest={descriptor.digest.hex()}"
+            )
+        elif isinstance(descriptor, AvbHashtreeDescriptor):
+            print(
+                f"  hashtree {descriptor.partition_name}: "
+                f"{descriptor.image_size} bytes, {descriptor.hash_algorithm}, "
+                f"root={descriptor.root_digest.hex()}"
+            )
+        elif isinstance(descriptor, AvbKernelCmdline):
+            print(f"  kernel_cmdline: {descriptor.cmdline!r} (flags={descriptor.flags})")
+        elif isinstance(descriptor, AvbChainPartition):
+            key_sha256 = descriptor.to_dict()["public_key_sha256"]
+            print(
+                f"  chain {descriptor.partition_name}: "
+                f"location={descriptor.rollback_index_location}, key_sha256={key_sha256}"
+            )
+        elif isinstance(descriptor, AvbUnknownDescriptor):
+            print(f"  unknown tag {descriptor.tag}: {len(descriptor.payload)} bytes")
+    if image.unknown_descriptors:
+        print("warning: unknown descriptors are reported but not interpreted")
+    print("note: parsing only; signatures and chain-of-trust are not verified")
+    print("read-only: no device access")
 
 
 def _resolve_fastboot(explicit: Path | None) -> Path | None:

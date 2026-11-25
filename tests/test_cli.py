@@ -390,3 +390,74 @@ def test_plan_retrofit_force_is_not_executable(tmp_path, capsys) -> None:
     assert exit_code == EXIT_UNKNOWN
     assert "executable: FALSE" in output
     assert "retrofit force" in output
+
+
+AVB_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "unsigned_vbmeta.img"
+
+
+def test_avb_info_fixture(capsys) -> None:
+    exit_code = main(["avb", "info", str(AVB_FIXTURE)])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "algorithm: NONE" in output
+    assert "property test.key" in output
+    assert "kernel_cmdline" in output
+    assert "not verified" in output
+    assert "read-only" in output
+
+
+def test_avb_info_json_is_machine_readable(capsys) -> None:
+    exit_code = main(["avb", "info", str(AVB_FIXTURE), "--json"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["header"]["algorithm"] == "NONE"
+    assert len(payload["descriptors"]) == 2
+    assert payload["descriptors"][0]["kind"] == "property"
+    assert payload["descriptors"][0]["key"] == "test.key"
+
+
+def test_avb_digest_matches_fixture_sha256(capsys) -> None:
+    exit_code = main(["avb", "digest", str(AVB_FIXTURE)])
+
+    output = capsys.readouterr().out.strip()
+    assert exit_code == EXIT_OK
+    assert output == "df3d0b84fce2abbf0ebdcebbec571cbc2d4b089dca88cf3ab8214c610059b405"
+
+
+def test_avb_digest_sha512(capsys) -> None:
+    exit_code = main(["avb", "digest", str(AVB_FIXTURE), "--hash", "sha512"])
+
+    output = capsys.readouterr().out.strip()
+    assert exit_code == EXIT_OK
+    assert len(output) == 128
+
+
+def test_avb_digest_missing_chain_fails(tmp_path, capsys) -> None:
+    exit_code = main(
+        ["avb", "digest", str(AVB_FIXTURE), "--chain", f"boot={tmp_path / 'missing.img'}"]
+    )
+
+    assert exit_code == EXIT_FAILED
+    assert "not found" in capsys.readouterr().err
+
+
+def test_avb_digest_malformed_chain_is_usage_error(capsys) -> None:
+    exit_code = main(["avb", "digest", str(AVB_FIXTURE), "--chain", "boot"])
+
+    assert exit_code == EXIT_USAGE
+    assert "NAME=PATH" in capsys.readouterr().err
+
+
+def test_avb_without_subcommand_is_usage_error(capsys) -> None:
+    assert main(["avb"]) == EXIT_USAGE
+    assert "choose 'info' or 'digest'" in capsys.readouterr().err
+
+
+def test_avb_malformed_image_fails(tmp_path, capsys) -> None:
+    image = tmp_path / "bad.img"
+    image.write_bytes(b"x" * 256)
+
+    assert main(["avb", "info", str(image)]) == EXIT_FAILED
+    assert "magic" in capsys.readouterr().err

@@ -89,6 +89,8 @@ uv run cairn probe --serial <serial>
 uv run cairn inspect <package.zip>
 uv run cairn provenance <package.zip> --index <index.json>
 uv run cairn plan <package.zip> --index <index.json>
+uv run cairn avb info <vbmeta.img>
+uv run cairn avb digest <vbmeta.img> [--chain boot=<boot.img>]
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
@@ -104,8 +106,10 @@ entries and nested archives, and can hash every entry with `--hash`. The `cairn
 provenance` command hashes a package and compares it with a local JSON index; a match
 is a signal, not a signature check. `cairn plan` emits a read-only vendor-order dry
 run with a canonical plan hash and refuses to mark it executable unless provenance is
-TRUE and every requested option is modeled. None of these commands writes to a
-device.
+TRUE and every requested option is modeled. `cairn avb` parses a standalone or
+padded VBMeta image and computes the AOSP digest, including supplied chained images;
+it does not verify RSA signatures or chain-of-trust yet. None of these commands
+writes to a device.
 
 ## Repository map
 
@@ -118,7 +122,7 @@ src/cairn/
   host/          Host Doctor: drivers, USB, power, virtualization, link soak
   package/       fastboot-info and factory/OTA package inspection
   plan/          read-only vendor-order planner and plan hash
-  provenance/    offline vendor hash index (skeleton)
+  provenance/    offline hash index and AVB VBMeta parsing (partial)
   safety/        safety rule engine and override policy
   sim/           transcript schema and fault-injecting fastboot simulator
 docs/

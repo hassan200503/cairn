@@ -24,6 +24,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   byte-capped output, and explicit failure classification.
 - Tool manifest with minimum versions, license audit flags, GPL separation markers,
   and SHA-256 verification; platform-tools 37.0.3 `fastboot.exe` artifact pinned.
+- Read-only AVB VBMeta parser and `cairn avb info|digest`: strict header and
+  descriptor bounds, hash/hashtree/chain/property/kernel-cmdline descriptors, AOSP
+  digest with supplied chained images, and an AOSP avbtool-generated fixture.
+  Parsing is not signature verification.
 - Full sparse-image walk and validation (chunk sizes, block totals, extended headers,
   trailing bytes), plus a `img2simg`/`simg2img` differential oracle harness and a
   dedicated CI job that installs AOSP libsparse on Ubuntu.

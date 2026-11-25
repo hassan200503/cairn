@@ -1,5 +1,24 @@
 """Provenance checks for packages and tools (read-only)."""
 
+from cairn.provenance.avb import (
+    ALGORITHMS_BY_TYPE,
+    AVB_MAGIC,
+    HEADER_SIZE,
+    MAX_VBMETA_BYTES,
+    AvbAlgorithm,
+    AvbChainPartition,
+    AvbError,
+    AvbHashDescriptor,
+    AvbHashtreeDescriptor,
+    AvbHeader,
+    AvbKernelCmdline,
+    AvbProperty,
+    AvbUnknownDescriptor,
+    VbmetaImage,
+    calculate_vbmeta_digest,
+    load_vbmeta,
+    parse_vbmeta,
+)
 from cairn.provenance.hash_index import (
     MAX_INDEX_BYTES,
     SCHEMA_VERSION,
@@ -12,12 +31,29 @@ from cairn.provenance.hash_index import (
 )
 
 __all__ = [
+    "ALGORITHMS_BY_TYPE",
+    "AVB_MAGIC",
+    "HEADER_SIZE",
     "MAX_INDEX_BYTES",
+    "MAX_VBMETA_BYTES",
     "SCHEMA_VERSION",
+    "AvbAlgorithm",
+    "AvbChainPartition",
+    "AvbError",
+    "AvbHashDescriptor",
+    "AvbHashtreeDescriptor",
+    "AvbHeader",
+    "AvbKernelCmdline",
+    "AvbProperty",
+    "AvbUnknownDescriptor",
     "HashIndex",
     "HashIndexError",
     "KnownPackage",
     "ProvenanceResult",
+    "VbmetaImage",
+    "calculate_vbmeta_digest",
     "load_hash_index",
+    "load_vbmeta",
+    "parse_vbmeta",
     "verify_manifest",
 ]

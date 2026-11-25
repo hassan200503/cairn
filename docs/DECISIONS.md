@@ -259,3 +259,20 @@ plan payload.
 **Consequences.** The planner is useful for dry runs before slot/retrofit facts exist,
 but it cannot authorize a write. Executable plans still require the safety engine and
 approval binding.
+
+---
+
+## ADR-018 - AVB parsing is not AVB verification
+
+**Context.** A VBMeta image can be parsed successfully while its RSA signature is
+invalid, its chain does not match the device key, or its rollback index would be
+rejected by the bootloader.
+
+**Decision.** Keep parsing, digest calculation, signature verification, chain-of-trust
+matching, and rollback evaluation as separate gates. `cairn avb` reports descriptors
+and the AOSP digest only and always states that signatures and chain-of-trust are not
+verified. Parse success never yields TRUE for SR-003 or SR-004.
+
+**Consequences.** The parser is useful for inspection and oracle comparisons before
+signature support lands, but it cannot authorize a write or contribute to Verified
+status on its own.
