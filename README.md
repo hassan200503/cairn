@@ -91,7 +91,7 @@ uv run cairn provenance <package.zip> --index <index.json>
 uv run cairn plan <package.zip> --index <index.json>
 uv run cairn avb info <vbmeta.img>
 uv run cairn avb digest <vbmeta.img> [--chain boot=<boot.img>]
-uv run cairn avb verify <vbmeta.img> [--key <key.avbpubkey>]
+uv run cairn avb verify <vbmeta.img> [--key <key.avbpubkey>] [--chain boot=<boot.img>]
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
@@ -110,9 +110,11 @@ run with a canonical plan hash and refuses to mark it executable unless provenan
 TRUE and every requested option is modeled. `cairn avb` parses standalone, padded,
 or footer-embedded VBMeta images, computes the AOSP digest including supplied
 chained images, and verifies the RSA signature against the embedded key or an
-expected raw AVB public key. Embedded-key validity is not a trust anchor, and
-chain-of-trust and rollback are not checked yet. None of these commands writes to a
-device.
+expected raw AVB public key. With `--chain`, it also follows the chain of trust:
+each chain descriptor's key is matched against the chained image's embedded key,
+the chained signature is checked, and nested chains are followed. Embedded-key
+validity is not a trust anchor, and rollback is not checked yet. None of these
+commands writes to a device.
 
 ## Repository map
 
@@ -125,10 +127,11 @@ src/cairn/
   host/          Host Doctor: drivers, USB, power, virtualization, link soak
   package/       fastboot-info and factory/OTA package inspection
   plan/          read-only vendor-order planner and plan hash
-  provenance/    offline hash index and AVB VBMeta parsing (partial)
+  provenance/    offline hash index, AVB VBMeta parsing, and AVB chain verification (partial)
   safety/        safety rule engine and override policy
   sim/           transcript schema and fault-injecting fastboot simulator
 docs/
+  STATE.md             canonical current state, for whoever picks this up next
   SPEC_V2.md          the reviewed, corrected v2 specification
   EXECUTION_PLAN.md   workstreams, phases, gates, first tasks
   ROADMAP.md          M0-M12 with acceptance criteria
@@ -159,4 +162,4 @@ Heimdall is MIT, Thor is MPL-2.0, and bkerler/edl and mtkclient are GPL-3.0.
 
 ## Documentation
 
-Start with [the v2 specification](docs/SPEC_V2.md) and [the execution plan](docs/EXECUTION_PLAN.md).
+Start with [the current state](docs/STATE.md), then [the v2 specification](docs/SPEC_V2.md) and [the execution plan](docs/EXECUTION_PLAN.md).

@@ -189,12 +189,18 @@ read-only VBMeta parser (`provenance/avb.py`) and `cairn avb info|digest|verify`
 now parse standalone, padded, and footer-embedded VBMeta headers and hash,
 hashtree, chain, property, and kernel cmdline descriptors, compute the AOSP digest
 from supplied chained images, and verify the VBMeta RSA signature against the
-embedded key with an optional expected raw AVB public key. AOSP avbtool-generated
-unsigned, signed, and footer fixtures validate the parser; the signed fixtures were
-cross-checked with `openssl` raw RSA recovery, and the footer fixture matches the
-AOSP `calculate_vbmeta_digest` output. Embedded-key validity is not a trust anchor:
-chain-of-trust key matching, per-location rollback handling, and the Pixel verifier
-oracle are pending, along with real vendor hashes.
+embedded key with an optional expected raw AVB public key. Chain-of-trust
+verification (`verify_vbmeta_chain`, `cairn avb verify --chain NAME=PATH`) checks
+that each chain descriptor's key equals the chained image's embedded key, that the
+chained signature validates, that the descriptor rollback location is non-zero
+while the chained header location is zero, and that nested chains hold, with
+tri-state fail-closed results where FALSE outranks UNKNOWN outranks TRUE. AOSP
+avbtool-generated unsigned, signed, footer, and two-level chain fixtures validate
+the implementation; the signed fixtures were cross-checked with `openssl` raw RSA
+recovery, and the footer and chain fixtures match the AOSP
+`calculate_vbmeta_digest` output. Embedded-key validity is not a trust anchor:
+per-location rollback handling, the lock-state-aware key check, the Pixel verifier
+oracle, and real vendor hashes are pending.
 
 ### T10 - Planner v0 and dry run
 

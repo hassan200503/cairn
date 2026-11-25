@@ -74,3 +74,48 @@ SHA-256 of `signed_boot.img`:
 
 AOSP `avbtool calculate_vbmeta_digest` reports:
 `5ce1e97790e8afd1d7120da6fc785161049c2c1705fe7dd53addee590b1e22b7`
+
+## Chain of trust
+
+`chain/` holds a two-level chain fixture. Two independent throwaway keys are
+used; neither private key is committed.
+
+- `chain/boot.img` is a copy of `signed_boot.img`. Its embedded VBMeta is signed
+  with the *chain* key and carries a hash descriptor for `boot`.
+- `chain/boot.avbpubkey` is the chain key's public key blob, a copy of
+  `signed_vbmeta.avbpubkey`.
+- `chain/vbmeta.img` is a top-level VBMeta signed with the *top* key. It holds a
+  chain-partition descriptor for `boot` with rollback index location 3 and the
+  chain key's public key blob.
+- `chain/top.avbpubkey` is the top key's public key blob.
+
+The chain key signs the chained partition; the top key signs the top-level
+VBMeta that names the chain key. This is the shape `avbtool` produces with
+`--chain_partition`, and it is what `verify_vbmeta_chain` checks.
+
+```text
+openssl genrsa -out topkey.pem 2048
+python avbtool.py extract_public_key --key topkey.pem --output top.avbpubkey
+python avbtool.py make_vbmeta_image \
+  --algorithm SHA256_RSA2048 \
+  --key topkey.pem \
+  --chain_partition boot:3:boot.avbpubkey \
+  --rollback_index 1 \
+  --output vbmeta.img
+```
+
+Run this from inside `chain/`. `avbtool` splits `--chain_partition` on `:`, so a
+Windows absolute path in the third field breaks the parser.
+
+SHA-256 of `chain/vbmeta.img`:
+`6429beddcf514e17235ba72fa3bc47558495d0d313aa7231c6070560f8dbf4c1`
+
+SHA-256 of `chain/top.avbpubkey`:
+`984eaad7d57d566dc2ad0f3e233e160d41f322fac9adb12406c98688cc2e3679`
+
+SHA-256 of `chain/boot.img`:
+`33c3d2c531988a99ffcf9fd1bd12aadf1dad75f3ee62ec98684428f6bdbecb31`
+
+AOSP `avbtool calculate_vbmeta_digest --image chain/vbmeta.img` resolves
+`boot.img` beside it and reports:
+`4718daa501cd42cf97865a46b45cf52b205cd6f0a45a09f46c2a95363df9fb83`

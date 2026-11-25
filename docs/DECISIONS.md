@@ -293,3 +293,28 @@ separate gates. An unsigned image is UNKNOWN, not valid.
 
 **Consequences.** The verifier is useful for corruption and oracle tests now, but
 SR-003 stays UNKNOWN until chain-of-trust or lock-state key checks land.
+
+---
+
+## ADR-020 - Chain verification is a consistency gate, not a trust gate
+
+**Context.** AVB chains let a top-level VBMeta authorize a chained partition by
+naming the key that signed it. Following that chain proves the chain is
+internally coherent. It does not prove the top-level key belongs to the device,
+because the top-level key is still the one inside the image being checked.
+
+**Decision.** Verify chains with `verify_vbmeta_chain` as a separate, tri-state,
+fail-closed gate. Each chain descriptor's key must equal the chained image's
+embedded key, the chained signature must validate, the descriptor's rollback index
+location must be non-zero, and the chained VBMeta header's rollback index location
+must be zero. Nested chains are followed recursively with cycle detection and a
+maximum depth of 8. A missing chained image is UNKNOWN; a key mismatch, an invalid
+chained signature, a bad rollback location, a cycle, or an excessive depth is
+FALSE. Results combine as FALSE over UNKNOWN over TRUE. A TRUE chain result means
+the chain is internally consistent; it is a trust anchor only when the top-level
+key was compared against an expected key.
+
+**Consequences.** `cairn avb verify --chain NAME=PATH` can now prove that a
+package's VBMeta chain is coherent and can detect a substituted chained image.
+It still cannot establish that the package came from the vendor, so SR-003 remains
+UNKNOWN until a lock-state-aware or device-bound key check lands.

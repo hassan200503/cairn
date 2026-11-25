@@ -279,6 +279,7 @@ class AvbSignature:
     valid: bool | None
     algorithm: AvbAlgorithm
     key_sha256: str
+    key_blob: bytes
     stored_digest: bytes
     computed_digest: bytes
     reason: str
@@ -558,6 +559,7 @@ def verify_vbmeta_signature(
                 valid=False,
                 algorithm=algorithm,
                 key_sha256=key_sha256,
+                key_blob=key_blob,
                 stored_digest=b"",
                 computed_digest=b"",
                 reason="unsigned VBMeta cannot match an expected key",
@@ -568,6 +570,7 @@ def verify_vbmeta_signature(
             valid=None,
             algorithm=algorithm,
             key_sha256=key_sha256,
+            key_blob=key_blob,
             stored_digest=b"",
             computed_digest=b"",
             reason="unsigned VBMeta (algorithm NONE)",
@@ -579,6 +582,7 @@ def verify_vbmeta_signature(
             valid=False,
             algorithm=algorithm,
             key_sha256=key_sha256,
+            key_blob=key_blob,
             stored_digest=b"",
             computed_digest=b"",
             reason="embedded public key does not match the expected key",
@@ -598,6 +602,7 @@ def verify_vbmeta_signature(
             valid=False,
             algorithm=algorithm,
             key_sha256=key_sha256,
+            key_blob=key_blob,
             stored_digest=stored_digest,
             computed_digest=computed_digest,
             reason="stored VBMeta digest does not match the header and auxiliary data",
@@ -612,6 +617,7 @@ def verify_vbmeta_signature(
             valid=False,
             algorithm=algorithm,
             key_sha256=key_sha256,
+            key_blob=key_blob,
             stored_digest=stored_digest,
             computed_digest=computed_digest,
             reason="signature is not a valid RSA value for the embedded key",
@@ -630,6 +636,7 @@ def verify_vbmeta_signature(
             valid=False,
             algorithm=algorithm,
             key_sha256=key_sha256,
+            key_blob=key_blob,
             stored_digest=stored_digest,
             computed_digest=computed_digest,
             reason="RSA signature does not match the embedded public key",
@@ -645,11 +652,261 @@ def verify_vbmeta_signature(
         valid=True,
         algorithm=algorithm,
         key_sha256=key_sha256,
+        key_blob=key_blob,
         stored_digest=stored_digest,
         computed_digest=computed_digest,
         reason=reason,
         expected_key_sha256=expected_key_sha256,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class AvbChainResult:
+    partition_name: str
+    rollback_index_location: int
+    depth: int
+    valid: bool | None
+    reason: str
+    descriptor_key_sha256: str
+    image_key_sha256: str | None
+    signature_valid: bool | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "partition_name": self.partition_name,
+            "rollback_index_location": self.rollback_index_location,
+            "depth": self.depth,
+            "valid": self.valid,
+            "reason": self.reason,
+            "descriptor_key_sha256": self.descriptor_key_sha256,
+            "image_key_sha256": self.image_key_sha256,
+            "signature_valid": self.signature_valid,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class AvbChainReport:
+    valid: bool | None
+    reason: str
+    signature: AvbSignature
+    chains: tuple[AvbChainResult, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "valid": self.valid,
+            "reason": self.reason,
+            "signature": self.signature.to_dict(),
+            "chains": [chain.to_dict() for chain in self.chains],
+        }
+
+
+def verify_vbmeta_chain(
+    image: VbmetaImage,
+    chain: Mapping[str, VbmetaImage],
+    *,
+    expected_key: bytes | None = None,
+    max_depth: int = 8,
+) -> AvbChainReport:
+    """Verify a top-level VBMeta and its supplied chained images.
+
+    This checks internal consistency: the top-level signature, each chain
+    descriptor's key against the chained image's embedded key, each chained
+    signature, and nested chains. It is not a trust decision unless the top-level
+    key is supplied as ``expected_key``.
+    """
+    if max_depth < 1:
+        raise ValueError("max_depth must be positive")
+    signature = verify_vbmeta_signature(image, expected_key=expected_key)
+    if signature.valid is False:
+        return AvbChainReport(
+            valid=False,
+            reason=f"top-level signature is invalid: {signature.reason}",
+            signature=signature,
+            chains=(),
+        )
+    if signature.valid is None:
+        return AvbChainReport(
+            valid=None,
+            reason="top-level VBMeta is unsigned; a chain cannot be established",
+            signature=signature,
+            chains=(),
+        )
+
+    results: list[AvbChainResult] = []
+    state = _verify_chain_descriptors(
+        image,
+        chain,
+        results,
+        visited=frozenset(),
+        depth=1,
+        max_depth=max_depth,
+    )
+    if state is True:
+        trust = (
+            "top-level embedded key is not a trust anchor"
+            if expected_key is None
+            else "top-level key matches the expected key"
+        )
+        reason = f"chain is internally consistent; {trust}"
+    elif state is False:
+        reason = "one or more chained images failed verification"
+    else:
+        reason = "one or more chained images could not be verified"
+    return AvbChainReport(
+        valid=state,
+        reason=reason,
+        signature=signature,
+        chains=tuple(results),
+    )
+
+
+def _verify_chain_descriptors(
+    image: VbmetaImage,
+    chain: Mapping[str, VbmetaImage],
+    results: list[AvbChainResult],
+    *,
+    visited: frozenset[str],
+    depth: int,
+    max_depth: int,
+) -> bool | None:
+    state: bool | None = True
+    for descriptor in image.chain_partitions:
+        descriptor_key_sha256 = hashlib.sha256(descriptor.public_key).hexdigest()
+        if depth > max_depth:
+            results.append(
+                AvbChainResult(
+                    partition_name=descriptor.partition_name,
+                    rollback_index_location=descriptor.rollback_index_location,
+                    depth=depth,
+                    valid=False,
+                    reason="maximum chain depth exceeded",
+                    descriptor_key_sha256=descriptor_key_sha256,
+                    image_key_sha256=None,
+                    signature_valid=None,
+                )
+            )
+            state = False
+            continue
+        if descriptor.rollback_index_location == 0:
+            results.append(
+                AvbChainResult(
+                    partition_name=descriptor.partition_name,
+                    rollback_index_location=0,
+                    depth=depth,
+                    valid=False,
+                    reason="chain rollback index location must be non-zero",
+                    descriptor_key_sha256=descriptor_key_sha256,
+                    image_key_sha256=None,
+                    signature_valid=None,
+                )
+            )
+            state = False
+            continue
+        if descriptor.partition_name in visited:
+            results.append(
+                AvbChainResult(
+                    partition_name=descriptor.partition_name,
+                    rollback_index_location=descriptor.rollback_index_location,
+                    depth=depth,
+                    valid=False,
+                    reason="chain cycle detected",
+                    descriptor_key_sha256=descriptor_key_sha256,
+                    image_key_sha256=None,
+                    signature_valid=None,
+                )
+            )
+            state = False
+            continue
+        chained = chain.get(descriptor.partition_name)
+        if chained is None:
+            results.append(
+                AvbChainResult(
+                    partition_name=descriptor.partition_name,
+                    rollback_index_location=descriptor.rollback_index_location,
+                    depth=depth,
+                    valid=None,
+                    reason="chained image was not supplied",
+                    descriptor_key_sha256=descriptor_key_sha256,
+                    image_key_sha256=None,
+                    signature_valid=None,
+                )
+            )
+            if state is True:
+                state = None
+            continue
+
+        chained_signature = verify_vbmeta_signature(
+            chained,
+            expected_key=descriptor.public_key,
+        )
+        if chained_signature.valid is not True:
+            results.append(
+                AvbChainResult(
+                    partition_name=descriptor.partition_name,
+                    rollback_index_location=descriptor.rollback_index_location,
+                    depth=depth,
+                    valid=chained_signature.valid,
+                    reason=chained_signature.reason,
+                    descriptor_key_sha256=descriptor_key_sha256,
+                    image_key_sha256=chained_signature.key_sha256,
+                    signature_valid=chained_signature.valid,
+                )
+            )
+            if chained_signature.valid is False:
+                state = False
+            elif state is True:
+                state = None
+            continue
+
+        if chained.header.rollback_index_location != 0:
+            results.append(
+                AvbChainResult(
+                    partition_name=descriptor.partition_name,
+                    rollback_index_location=descriptor.rollback_index_location,
+                    depth=depth,
+                    valid=False,
+                    reason="chained VBMeta rollback index location must be 0",
+                    descriptor_key_sha256=descriptor_key_sha256,
+                    image_key_sha256=chained_signature.key_sha256,
+                    signature_valid=True,
+                )
+            )
+            state = False
+            continue
+
+        nested = _verify_chain_descriptors(
+            chained,
+            chain,
+            results,
+            visited=visited | {descriptor.partition_name},
+            depth=depth + 1,
+            max_depth=max_depth,
+        )
+        results.append(
+            AvbChainResult(
+                partition_name=descriptor.partition_name,
+                rollback_index_location=descriptor.rollback_index_location,
+                depth=depth,
+                valid=nested,
+                reason=(
+                    "key and signature match"
+                    if nested is True
+                    else (
+                        "key and signature match, but a nested chain failed"
+                        if nested is False
+                        else "key and signature match, but a nested chain is incomplete"
+                    )
+                ),
+                descriptor_key_sha256=descriptor_key_sha256,
+                image_key_sha256=chained_signature.key_sha256,
+                signature_valid=True,
+            )
+        )
+        if nested is False:
+            state = False
+        elif nested is None and state is True:
+            state = None
+    return state
 
 
 def _auth_slice(image: VbmetaImage, offset: int, size: int) -> bytes:

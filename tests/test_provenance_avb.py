@@ -22,6 +22,7 @@ from cairn.provenance.avb import (
     parse_footer,
     parse_vbmeta,
     parse_vbmeta_image,
+    verify_vbmeta_chain,
     verify_vbmeta_signature,
 )
 
@@ -532,3 +533,63 @@ def test_footer_rejects_out_of_range_vbmeta_offset() -> None:
 
 def test_parse_footer_returns_none_without_magic() -> None:
     assert parse_footer(FIXTURE.read_bytes()) is None
+
+
+CHAIN_TOP = Path(__file__).parent / "fixtures" / "avb" / "chain" / "vbmeta.img"
+CHAIN_BOOT = Path(__file__).parent / "fixtures" / "avb" / "chain" / "boot.img"
+CHAIN_TOP_KEY = Path(__file__).parent / "fixtures" / "avb" / "chain" / "top.avbpubkey"
+
+
+def test_chain_verification_accepts_matching_chained_image() -> None:
+    report = verify_vbmeta_chain(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+    )
+
+    assert report.valid is True
+    assert report.signature.valid is True
+    assert len(report.chains) == 1
+    assert report.chains[0].partition_name == "boot"
+    assert report.chains[0].rollback_index_location == 3
+    assert report.chains[0].valid is True
+    assert report.chains[0].descriptor_key_sha256 == report.chains[0].image_key_sha256
+
+
+def test_chain_verification_with_expected_top_key() -> None:
+    report = verify_vbmeta_chain(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+        expected_key=CHAIN_TOP_KEY.read_bytes(),
+    )
+
+    assert report.valid is True
+    assert "matches the expected key" in report.reason
+
+
+def test_chain_verification_missing_image_is_unknown() -> None:
+    report = verify_vbmeta_chain(load_vbmeta(CHAIN_TOP), {})
+
+    assert report.valid is None
+    assert report.chains[0].valid is None
+    assert "not supplied" in report.chains[0].reason
+
+
+def test_chain_verification_rejects_wrong_chained_key() -> None:
+    report = verify_vbmeta_chain(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(FIXTURE)},
+    )
+
+    assert report.valid is False
+    assert report.chains[0].valid is False
+    assert "expected key" in report.chains[0].reason
+
+
+def test_chain_digest_matches_aosp() -> None:
+    assert (
+        calculate_vbmeta_digest(
+            load_vbmeta(CHAIN_TOP),
+            chain={"boot": load_vbmeta(CHAIN_BOOT)},
+        )
+        == "4718daa501cd42cf97865a46b45cf52b205cd6f0a45a09f46c2a95363df9fb83"
+    )

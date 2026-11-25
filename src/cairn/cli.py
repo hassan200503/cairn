@@ -28,6 +28,7 @@ from cairn.plan.planner import (
 )
 from cairn.provenance.avb import (
     AvbChainPartition,
+    AvbChainReport,
     AvbError,
     AvbHashDescriptor,
     AvbHashtreeDescriptor,
@@ -38,6 +39,7 @@ from cairn.provenance.avb import (
     VbmetaImage,
     calculate_vbmeta_digest,
     load_vbmeta,
+    verify_vbmeta_chain,
     verify_vbmeta_signature,
 )
 from cairn.provenance.hash_index import (
@@ -244,6 +246,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="AVBPUBKEY",
         help="expected raw AVB public key; without it the embedded key is only self-consistent",
+    )
+    avb_verify.add_argument(
+        "--chain",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="chained partition image; repeat for multiple chains",
     )
     avb_verify.add_argument(
         "--json",
@@ -633,25 +642,11 @@ def _run_avb_info(args: argparse.Namespace) -> int:
 
 
 def _run_avb_digest(args: argparse.Namespace) -> int:
-    chain: dict[str, VbmetaImage] = {}
-    for spec in args.chain:
-        name, separator, path_text = spec.partition("=")
-        if not separator or not name or not path_text:
-            print(
-                f"cairn avb digest: malformed --chain {spec!r}; use NAME=PATH",
-                file=sys.stderr,
-            )
-            return EXIT_USAGE
-        if name in chain:
-            print(f"cairn avb digest: duplicate chain {name!r}", file=sys.stderr)
-            return EXIT_USAGE
-        try:
-            chain[name] = load_vbmeta(Path(path_text))
-        except AvbError as exc:
-            print(f"cairn avb digest: {exc}", file=sys.stderr)
-            return EXIT_FAILED
-
+    paths = _parse_chain_paths(args.chain, "cairn avb digest")
+    if paths is None:
+        return EXIT_USAGE
     try:
+        chain = _load_chain_images(paths)
         image = load_vbmeta(args.image)
         digest = calculate_vbmeta_digest(image, hash_name=args.hash, chain=chain)
     except AvbError as exc:
@@ -663,22 +658,61 @@ def _run_avb_digest(args: argparse.Namespace) -> int:
 
 
 def _run_avb_verify(args: argparse.Namespace) -> int:
+    paths = _parse_chain_paths(args.chain, "cairn avb verify")
+    if paths is None:
+        return EXIT_USAGE
     try:
         image = load_vbmeta(args.image)
         expected_key = None if args.key is None else _read_avb_key(args.key)
-        result = verify_vbmeta_signature(image, expected_key=expected_key)
+        if paths:
+            chain = _load_chain_images(paths)
+            report = verify_vbmeta_chain(image, chain, expected_key=expected_key)
+        else:
+            report = None
+            result = verify_vbmeta_signature(image, expected_key=expected_key)
     except AvbError as exc:
         print(f"cairn avb verify: {exc}", file=sys.stderr)
         return EXIT_FAILED
+
+    if report is not None:
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2))
+        else:
+            _print_chain_report(report)
+        return _exit_code_for_state(report.valid)
 
     if args.json:
         print(json.dumps(result.to_dict(), indent=2))
     else:
         _print_signature(result)
+    return _exit_code_for_state(result.valid)
 
-    if result.valid is True:
+
+def _parse_chain_paths(specs: list[str], command: str) -> dict[str, Path] | None:
+    paths: dict[str, Path] = {}
+    for spec in specs:
+        name, separator, path_text = spec.partition("=")
+        if not separator or not name or not path_text:
+            print(
+                f"{command}: malformed --chain {spec!r}; use NAME=PATH",
+                file=sys.stderr,
+            )
+            return None
+        if name in paths:
+            print(f"{command}: duplicate chain {name!r}", file=sys.stderr)
+            return None
+        paths[name] = Path(path_text)
+    return paths
+
+
+def _load_chain_images(paths: dict[str, Path]) -> dict[str, VbmetaImage]:
+    return {name: load_vbmeta(path) for name, path in paths.items()}
+
+
+def _exit_code_for_state(state: bool | None) -> int:
+    if state is True:
         return EXIT_OK
-    if result.valid is False:
+    if state is False:
         return EXIT_FAILED
     return EXIT_UNKNOWN
 
@@ -697,7 +731,7 @@ def _read_avb_key(path: Path) -> bytes:
     return data
 
 
-def _print_signature(result: AvbSignature) -> None:
+def _print_signature(result: AvbSignature, *, chain_checked: bool = False) -> None:
     print(f"algorithm: {result.algorithm.name}")
     if not result.signed:
         print("signature: unsigned; not verified")
@@ -711,8 +745,33 @@ def _print_signature(result: AvbSignature) -> None:
             print(f"expected key sha256: {result.expected_key_sha256}")
         print(f"stored digest: {result.stored_digest.hex()}")
         print(f"computed digest: {result.computed_digest.hex()}")
-    print("note: chain-of-trust and rollback are not checked")
+    if chain_checked:
+        print("note: chain-of-trust checked; rollback is not checked")
+    else:
+        print("note: chain-of-trust and rollback are not checked")
     print("read-only: no device access")
+
+
+def _print_chain_report(report: AvbChainReport) -> None:
+    _print_signature(report.signature, chain_checked=bool(report.chains))
+    if report.chains:
+        print(f"chains: {len(report.chains)}")
+        for chain in report.chains:
+            state = _state_label(chain.valid)
+            print(
+                f"  {chain.partition_name}: {state} "
+                f"(depth={chain.depth}, location={chain.rollback_index_location}; "
+                f"{chain.reason})"
+            )
+    print(f"overall: {_state_label(report.valid)} ({report.reason})")
+
+
+def _state_label(state: bool | None) -> str:
+    if state is True:
+        return "valid"
+    if state is False:
+        return "INVALID"
+    return "UNKNOWN"
 
 
 def _print_vbmeta(image: VbmetaImage) -> None:

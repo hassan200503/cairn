@@ -30,6 +30,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   PKCS#1 v1.5 RSA signature verification against the embedded key or an expected raw
   AVB public key. AOSP avbtool-generated unsigned, signed, and footer fixtures;
   embedded-key validity is not a trust anchor.
+- AVB chain-of-trust verification and `cairn avb verify --chain NAME=PATH`: each
+  chain descriptor's key is matched against the chained image's embedded key, the
+  chained signature is verified, the descriptor rollback location must be non-zero
+  while the chained header location must be zero, and nested chains are followed
+  with cycle detection and a depth limit. Results are tri-state and fail-closed,
+  with FALSE outranking UNKNOWN outranking TRUE. Backed by an AOSP avbtool-generated
+  two-level chain fixture whose digest matches `avbtool calculate_vbmeta_digest`.
 - Full sparse-image walk and validation (chunk sizes, block totals, extended headers,
   trailing bytes), plus a `img2simg`/`simg2img` differential oracle harness and a
   dedicated CI job that installs AOSP libsparse on Ubuntu.

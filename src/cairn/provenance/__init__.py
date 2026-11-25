@@ -9,6 +9,8 @@ from cairn.provenance.avb import (
     MAX_VBMETA_BYTES,
     AvbAlgorithm,
     AvbChainPartition,
+    AvbChainReport,
+    AvbChainResult,
     AvbError,
     AvbFooter,
     AvbHashDescriptor,
@@ -24,6 +26,7 @@ from cairn.provenance.avb import (
     parse_footer,
     parse_vbmeta,
     parse_vbmeta_image,
+    verify_vbmeta_chain,
     verify_vbmeta_signature,
 )
 from cairn.provenance.hash_index import (
@@ -48,6 +51,8 @@ __all__ = [
     "SCHEMA_VERSION",
     "AvbAlgorithm",
     "AvbChainPartition",
+    "AvbChainReport",
+    "AvbChainResult",
     "AvbError",
     "AvbFooter",
     "AvbHashDescriptor",
@@ -69,5 +74,6 @@ __all__ = [
     "parse_vbmeta",
     "parse_vbmeta_image",
     "verify_manifest",
+    "verify_vbmeta_chain",
     "verify_vbmeta_signature",
 ]

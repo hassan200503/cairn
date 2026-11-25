@@ -563,3 +563,81 @@ def test_avb_verify_footer_image(capsys) -> None:
     assert exit_code == EXIT_OK
     assert "signature: valid" in output
     assert "not a trust anchor" in output
+
+
+CHAIN_TOP = Path(__file__).parent / "fixtures" / "avb" / "chain" / "vbmeta.img"
+CHAIN_BOOT = Path(__file__).parent / "fixtures" / "avb" / "chain" / "boot.img"
+CHAIN_TOP_KEY = Path(__file__).parent / "fixtures" / "avb" / "chain" / "top.avbpubkey"
+
+
+def test_avb_verify_chain(capsys) -> None:
+    exit_code = main(["avb", "verify", str(CHAIN_TOP), "--chain", f"boot={CHAIN_BOOT}"])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "chains: 1" in output
+    assert "boot: valid" in output
+    assert "overall: valid" in output
+    assert "chain-of-trust checked" in output
+
+
+def test_avb_verify_chain_json(capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "verify",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["valid"] is True
+    assert payload["chains"][0]["partition_name"] == "boot"
+
+
+def test_avb_verify_chain_with_expected_top_key(capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "verify",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--key",
+            str(CHAIN_TOP_KEY),
+        ]
+    )
+
+    assert exit_code == EXIT_OK
+    assert "matches the expected key" in capsys.readouterr().out
+
+
+def test_avb_verify_missing_chain_is_unknown(capsys) -> None:
+    exit_code = main(["avb", "verify", str(CHAIN_TOP), "--chain", f"other={CHAIN_BOOT}"])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "chained image was not supplied" in output
+
+
+def test_avb_verify_wrong_chain_is_invalid(capsys) -> None:
+    exit_code = main(["avb", "verify", str(CHAIN_TOP), "--chain", f"boot={AVB_FIXTURE}"])
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_FAILED
+    assert "boot: INVALID" in output
+    assert "overall: INVALID" in output
+
+
+def test_avb_digest_chain_matches_aosp(capsys) -> None:
+    exit_code = main(["avb", "digest", str(CHAIN_TOP), "--chain", f"boot={CHAIN_BOOT}"])
+
+    assert exit_code == EXIT_OK
+    assert (
+        capsys.readouterr().out.strip()
+        == "4718daa501cd42cf97865a46b45cf52b205cd6f0a45a09f46c2a95363df9fb83"
+    )

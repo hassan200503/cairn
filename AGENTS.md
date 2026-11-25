@@ -11,11 +11,13 @@ build plan is `docs/EXECUTION_PLAN.md`.
 
 Read order before changing code:
 
-1. `docs/SPEC_V2.md`
-2. `docs/SAFETY_RULES.md`
-3. `docs/DECISIONS.md`
-4. `docs/KNOWN_UNKNOWNS.md`
-5. `docs/EXECUTION_PLAN.md`
+1. `docs/STATE.md` (current state of the repository: what is implemented, what is
+   proven, what is still unknown, and what the next slice is)
+2. `docs/SPEC_V2.md`
+3. `docs/SAFETY_RULES.md`
+4. `docs/DECISIONS.md`
+5. `docs/KNOWN_UNKNOWNS.md`
+6. `docs/EXECUTION_PLAN.md`
 
 ## Hard rules
 
@@ -34,6 +36,8 @@ Read order before changing code:
 9. Differential-test parsers against official tools before their output feeds a
    safety rule.
 10. Do not commit secrets, device identifiers, or unscrubbed transcripts.
+11. Keep `docs/STATE.md` accurate: update it in the same commit as any change to
+    what is implemented, so the next model is never misled about the state.
 
 ## Commands
 
