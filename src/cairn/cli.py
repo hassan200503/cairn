@@ -20,13 +20,13 @@ from cairn.core.verification import VerificationLevel
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
 from cairn.package.archive import PackageError, PackageManifest, load_package
 from cairn.plan.planner import (
-    Plan,
     PlanError,
     PlanOptions,
     PlanStep,
     SlotPolicy,
     build_plan,
 )
+from cairn.plan.safety import PlanAssessment, assess_plan
 from cairn.provenance.avb import (
     AvbChainPartition,
     AvbChainReport,
@@ -49,6 +49,7 @@ from cairn.provenance.hash_index import (
     load_hash_index,
     verify_manifest,
 )
+from cairn.provenance.trust import LockKeyCheck, LockState, evaluate_lock_key
 from cairn.rollback.device import (
     DeviceRollbackRead,
     read_stored_rollback_indexes,
@@ -59,6 +60,7 @@ from cairn.rollback.oracle import (
     RollbackReport,
     evaluate_avb_rollback,
 )
+from cairn.safety.engine import SafetyContext, SafetyEngine
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
@@ -216,7 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     avb = subparsers.add_parser(
         "avb",
-        help="read-only AVB VBMeta inspection (no signature verification)",
+        help="read-only AVB inspection, verification, and key checks",
     )
     avb_sub = avb.add_subparsers(dest="avb_command", metavar="subcommand")
     avb_info = avb_sub.add_parser(
@@ -266,6 +268,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="chained partition image; repeat for multiple chains",
     )
     avb_verify.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+    avb_key_check = avb_sub.add_parser(
+        "key-check",
+        help="compare the image key with a trusted key under a lock state",
+    )
+    avb_key_check.add_argument("image", type=Path, help="VBMeta image")
+    avb_key_check.add_argument(
+        "--key",
+        type=Path,
+        metavar="AVBPUBKEY",
+        help="raw AVB public key trusted for this device",
+    )
+    avb_key_check.add_argument(
+        "--lock-state",
+        choices=("locked", "unlocked", "unknown"),
+        required=True,
+        help="caller-supplied bootloader lock state used to interpret the key match",
+    )
+    avb_key_check.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -664,18 +688,22 @@ def _run_plan(args: argparse.Namespace) -> int:
                 retrofit_force=args.retrofit_force,
             ),
         )
+        safety = SafetyEngine().evaluate(SafetyContext(provenance=provenance))
+        assessment = assess_plan(plan, safety)
     except (HashIndexError, PackageError, PlanError) as exc:
         print(f"cairn plan: {exc}", file=sys.stderr)
         return EXIT_FAILED
 
     if args.json:
-        print(json.dumps(plan.to_dict(), indent=2))
+        print(json.dumps(assessment.to_dict(), indent=2))
     else:
-        _print_plan(plan)
-    return EXIT_OK if plan.executable else EXIT_UNKNOWN
+        _print_plan(assessment)
+    return EXIT_OK if assessment.executable else EXIT_UNKNOWN
 
 
-def _print_plan(plan: Plan) -> None:
+def _print_plan(assessment: PlanAssessment) -> None:
+    plan = assessment.plan
+    safety = assessment.safety
     print(f"plan: {plan.plan_sha256}")
     print(f"package sha256: {plan.package_sha256}")
     print(f"provenance: {plan.provenance.state.name}")
@@ -687,7 +715,20 @@ def _print_plan(plan: Plan) -> None:
         f"slot={plan.options.slot_policy.value}, "
         f"retrofit_force={'yes' if plan.options.retrofit_force else 'no'}"
     )
-    print(f"executable: {'TRUE' if plan.executable else 'FALSE'}")
+    print(f"structurally executable: {'TRUE' if plan.executable else 'FALSE'}")
+    print(f"safety verdict: {safety.verdict.name}")
+    print(f"safety can proceed: {'TRUE' if safety.can_proceed else 'FALSE'}")
+    print(f"safety evidence snapshot: {safety.evidence_snapshot_sha256}")
+    if safety.blocking:
+        print("safety blocking:")
+        for rule_id in safety.blocking:
+            print(f"  - {rule_id}")
+    print("safety rules:")
+    for rule in safety.rules:
+        print(f"  {rule.rule_id}: {rule.state.name} - {rule.reason}")
+        for warning in rule.warnings:
+            print(f"     warning: {warning}")
+    print(f"executable: {'TRUE' if assessment.executable else 'FALSE'}")
     print(f"steps: {len(plan.steps)}")
     for step in plan.steps:
         print(f"  {step.number}. {_step_summary(step)} (line {step.source_line})")
@@ -722,7 +763,12 @@ def _run_avb(args: argparse.Namespace) -> int:
         return _run_avb_digest(args)
     if args.avb_command == "verify":
         return _run_avb_verify(args)
-    print("cairn avb: choose 'info', 'digest', or 'verify'", file=sys.stderr)
+    if args.avb_command == "key-check":
+        return _run_avb_key_check(args)
+    print(
+        "cairn avb: choose 'info', 'digest', 'verify', or 'key-check'",
+        file=sys.stderr,
+    )
     return EXIT_USAGE
 
 
@@ -787,6 +833,27 @@ def _run_avb_verify(args: argparse.Namespace) -> int:
     return _exit_code_for_state(result.valid)
 
 
+def _run_avb_key_check(args: argparse.Namespace) -> int:
+    try:
+        image = load_vbmeta(args.image)
+        trusted_key = None if args.key is None else _read_avb_key(args.key)
+        signature = verify_vbmeta_signature(image)
+        result = evaluate_lock_key(
+            signature,
+            lock_state=LockState(args.lock_state),
+            trusted_key=trusted_key,
+        )
+    except AvbError as exc:
+        print(f"cairn avb key-check: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        _print_lock_key_check(result)
+    return _exit_code_for_tri(result.state)
+
+
 def _parse_chain_paths(specs: list[str], command: str) -> dict[str, Path] | None:
     paths: dict[str, Path] = {}
     for spec in specs:
@@ -848,6 +915,29 @@ def _print_signature(result: AvbSignature, *, chain_checked: bool = False) -> No
         print("note: chain-of-trust checked; rollback is not checked")
     else:
         print("note: chain-of-trust and rollback are not checked")
+    print("read-only: no device access")
+
+
+def _print_lock_key_check(result: LockKeyCheck) -> None:
+    print(f"key trust: {_tri_label(result.state)}")
+    print(f"lock state: {result.lock_state.value}")
+    if result.key_matches is None:
+        print("key match: unknown")
+    elif result.key_matches:
+        print("key match: yes")
+    else:
+        print("key match: no")
+    if result.image_key_sha256 is not None:
+        print(f"image key sha256: {result.image_key_sha256}")
+    if result.trusted_key_sha256 is not None:
+        print(f"trusted key sha256: {result.trusted_key_sha256}")
+    print(f"reason: {result.reason}")
+    for warning in result.warnings:
+        print(f"warning: {warning}")
+    print(
+        "note: the lock state and trusted key are caller-supplied; this does not "
+        "read device evidence or the device's root of trust"
+    )
     print("read-only: no device access")
 
 

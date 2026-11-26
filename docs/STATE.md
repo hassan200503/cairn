@@ -10,7 +10,7 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-26, after the vendor-specific device stored-index reader slice.
+**Last updated:** 2026-11-26, after the safety-gated plan slice.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -75,6 +75,9 @@ Design notes, in the order the reader should meet them:
 - **Everything is read-only so far.** No command in this repository writes to a
   device. `cairn plan` is a dry run. That is deliberate: the M6 gate and the
   recovery drill (T15) come before any write path exists.
+- **Plans have two gates.** Structural planning proves only the vendor-order dry
+  run is modeled; a separate SafetyReport must also allow proceeding. Missing
+  evidence is shown as `UNKNOWN` and blocks rather than becoming a pass.
 - **Tri-state everywhere.** `TRUE` / `FALSE` / `UNKNOWN` with the helpers in
   `core/tristate.py`. `UNKNOWN` blocks. `FALSE` blocks and is never overridable.
 - **Evidence carries its provenance.** `core/evidence.py` gives every fact a
@@ -96,10 +99,11 @@ Design notes, in the order the reader should meet them:
 | `cairn probe` | read-only `getvar all` device probe | 0/1 |
 | `cairn inspect PACKAGE` | read-only factory/OTA zip inspection, no extraction | 0/1 |
 | `cairn provenance PACKAGE --index INDEX` | match a package against a local hash index | 0 TRUE / 1 FALSE / 3 UNKNOWN |
-| `cairn plan PACKAGE --index INDEX` | read-only vendor-order dry run with a plan hash | 0 executable / 1 error / 3 not executable |
+| `cairn plan PACKAGE --index INDEX` | read-only vendor-order dry run plus SR-001/002/003/004/012/013 safety report | 0 both structural and safety gates pass / 1 error / 3 blocked |
 | `cairn avb info IMAGE` | parse VBMeta headers and descriptors | 0/1 |
 | `cairn avb digest IMAGE [--chain NAME=PATH]` | compute the AOSP VBMeta digest | 0/1/2 |
 | `cairn avb verify IMAGE [--key KEY] [--chain NAME=PATH]` | verify signature and, with `--chain`, the chain of trust | 0 valid / 1 invalid / 3 unknown |
+| `cairn avb key-check IMAGE [--key KEY] --lock-state STATE` | contextual expected-key check; inputs are caller-supplied, not device evidence | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn rollback read [--fastboot PATH] [--serial SERIAL] [--simulate TRANSCRIPT]` | read vendor-reported stored rollback indexes with one read-only `getvar all` | 0 complete / 2 usage / 3 UNKNOWN |
 | `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device]` | compare package rollback counters with caller-supplied or device-read stored values | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 
@@ -121,11 +125,15 @@ below it. **Do not let a higher rung's wording leak into a lower rung's output.*
 | 3. Embedded-key signature | `avb verify IMAGE` | the image is internally self-consistent | that the image came from the vendor |
 | 4. Chain of trust | `avb verify IMAGE --chain boot=boot.img` | the chain is internally coherent end to end | that the top-level key belongs to the device |
 | 5. Expected / device-bound key | `avb verify IMAGE --key known.avbpubkey` | the image is signed by a key we already trust | — |
-| 6. Lock-state-aware device key | *not implemented* | the key is bound to this device | — |
+| 6. Device-bound lock/key anchor | *not implemented* | the key is bound to this device | — |
 
 Rungs 1–4 are implemented. Rung 5 is implemented only when the caller supplies an
-expected key file, and it is still only as strong as that file. Rung 6 is the
-missing piece and is tracked as KU-029.
+expected key file, and it is still only as strong as that file. `avb key-check`
+adds a caller-supplied lock-state context: invalid signatures and locked mismatches
+are FALSE; unsigned images, missing keys, unknown state, and unlocked mismatches
+are UNKNOWN. It is useful offline diagnosis, not a new trust rung, because neither
+the lock state nor the key is read from the device. Rung 6 remains the missing
+piece and is tracked as KU-029.
 
 Additional AVB facts that the implementation encodes:
 
@@ -200,6 +208,8 @@ These statements are enforced in code and in output text. Do not weaken them.
 - Parsing a VBMeta successfully is **not** verification (ADR-018).
 - A valid embedded-key signature is **not** trust (ADR-019).
 - A coherent chain is **not** a trust anchor without an expected key (ADR-020).
+- `avb key-check` takes caller-supplied lock state and trusted-key inputs; it is
+  not device evidence and cannot satisfy SR-013 (ADR-023, KU-029).
 - A rollback comparison without `--device` uses caller-supplied stored indexes.
   With `--device`, the stored indexes are a vendor-specific device claim, not AVB
   verification; absence, conflict, or a failed read is `UNKNOWN` (ADR-021,
@@ -284,11 +294,12 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 419 passed, 2 skipped
+uv run pytest -q               # 437 passed, 2 skipped
 ```
 
 The latest CI run for a pushed commit is `45819113387` for `9ff02bf` and is
-green. The 419-test baseline above was confirmed locally and in that run.
+green. The 437-test baseline above was confirmed locally after the safety-gated
+plan slice; CI has not run the slices after `9ff02bf` yet.
 
 The two local skips are environmental, not gaps in coverage:
 
@@ -339,8 +350,12 @@ These are the reasons the remaining work cannot simply be "finished":
   Pixel `ap-ar-s` OEM signal has no known AVB mapping. Devices without an observed
   variable stay `UNKNOWN` and SR-004 blocks (KU-030). No OEM counter policy ships
   yet.
-- **No lock-state-aware key check.** Rung 6 of the AVB ladder is unimplemented
-  (KU-029).
+- **No device-bound lock/key anchor.** `avb key-check` consumes caller-supplied
+  inputs only; rung 6 remains unimplemented (KU-029).
+- **No catalog-bound safety preflight.** `cairn plan` now evaluates all six current
+  safety rules, but it has only package provenance evidence; absent identity, AVB,
+  rollback, tool, and lock/key facts remain UNKNOWN and it is therefore
+  non-executable (KU-031).
 - **No Pixel verifier oracle.** `pixel_factory_image_verify.py` has not been
   run against our output.
 - **EDL, MediaTek, and Samsung backends** are research-only; no hardware, no
@@ -358,12 +373,13 @@ push, confirm CI green.
    getvar forms. Remaining work: collect real scrubbed transcripts and hardware
    findings, decide whether an EDL fallback is in scope, and keep OEM counter
    policy out until it has a source. KU-030 stays open for the generic/OEM paths.
-2. **T09 — Lock-state-aware key check.** Close rung 6 of the AVB ladder: decide
-   authenticity from the device's lock state plus a known key, not from the
-   embedded key.
+2. **T09 — Device-bound lock/key anchor.** The contextual `avb key-check` is
+   implemented, but rung 6 still needs a fresh device lock-state observation and
+   a hardware finding or catalog record that anchors the expected key.
 3. **T11 — Wire the safety engine into the CLI.** `cairn plan` should evaluate
-   SR-001/002/003/004/012/013 against real evidence and refuse to hand a plan
-   to an executor when a rule is `FALSE` or an un-overridden `UNKNOWN`.
+   all six current rules and refuses an executable result for any `FALSE` or
+   un-overridden `UNKNOWN`. Remaining work is catalog-bound collection and binding
+   of fresh identity, AVB, rollback, tool, and lock/key evidence (KU-031).
 4. **T13 — Approval binding.** Approval token over plan hash, snapshot hash,
    package hashes, a device-bound nonce, and tool versions, with a TOCTOU test.
 5. **T14 — Journal and executor.** Write-ahead journal, idempotency classes,

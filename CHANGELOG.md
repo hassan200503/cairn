@@ -37,6 +37,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with cycle detection and a depth limit. Results are tri-state and fail-closed,
   with FALSE outranking UNKNOWN outranking TRUE. Backed by an AOSP avbtool-generated
   two-level chain fixture whose digest matches `avbtool calculate_vbmeta_digest`.
+- Lock-state-contextual AVB expected-key checks via `cairn avb key-check`: an
+  invalid signature or locked-key mismatch is FALSE; unsigned images, a missing
+  key, or unknown lock state are UNKNOWN; an unlocked mismatch is explicitly
+  UNKNOWN with a warning. The lock state and trusted key are caller-supplied, so
+  this is not device-root evidence and does not satisfy SR-013 by itself.
 - Full sparse-image walk and validation (chunk sizes, block totals, extended headers,
   trailing bytes), plus a `img2simg`/`simg2img` differential oracle harness and a
   dedicated CI job that installs AOSP libsparse on Ubuntu.
@@ -58,6 +63,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commands with deviations, annotates critical writes, hashes the canonical plan,
   and refuses to mark a plan executable without TRUE provenance and modeled options.
   The fallback is stop-and-reprobe, not a speculative flash sequence.
+- Safety-gated `cairn plan`: every dry run now carries SR-001/002/003/004/012/013,
+  a deterministic evidence-snapshot hash, and distinct structural versus safety
+  decisions. The command combines both gates before it calls a plan executable;
+  unavailable evidence is `UNKNOWN` and blocks instead of being assumed.
 - Safety rule engine v0 with SR-001 identity, SR-002 provenance, SR-003 AVB chain,
   SR-004 rollback, SR-012 tool identity, and SR-013 lock/key aggregation. FALSE is
   never overridable; UNKNOWN blocks unless the rule is explicitly overridable;

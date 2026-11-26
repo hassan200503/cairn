@@ -229,6 +229,11 @@ check.
 **Source:** [AOSP-AVB], device lock probe.
 **Test:** locked/match, locked/mismatch, unlocked/mismatch, unknown.
 
+`cairn avb key-check` is an offline, contextual diagnostic only: both its lock
+state and trusted key are caller-supplied. Its output is not `Evidence` and must
+not satisfy SR-013 until a fresh, usable device lock-state probe and a
+device-bound trusted-key source are available.
+
 ### SR-014 - Verification level
 
 **Condition:** achieved level is at least the job's required level.

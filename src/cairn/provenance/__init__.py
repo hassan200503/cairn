@@ -39,6 +39,12 @@ from cairn.provenance.hash_index import (
     load_hash_index,
     verify_manifest,
 )
+from cairn.provenance.trust import (
+    MAX_TRUSTED_KEY_BYTES,
+    LockKeyCheck,
+    LockState,
+    evaluate_lock_key,
+)
 
 __all__ = [
     "ALGORITHMS_BY_TYPE",
@@ -47,6 +53,7 @@ __all__ = [
     "FOOTER_SIZE",
     "HEADER_SIZE",
     "MAX_INDEX_BYTES",
+    "MAX_TRUSTED_KEY_BYTES",
     "MAX_VBMETA_BYTES",
     "SCHEMA_VERSION",
     "AvbAlgorithm",
@@ -65,9 +72,12 @@ __all__ = [
     "HashIndex",
     "HashIndexError",
     "KnownPackage",
+    "LockKeyCheck",
+    "LockState",
     "ProvenanceResult",
     "VbmetaImage",
     "calculate_vbmeta_digest",
+    "evaluate_lock_key",
     "load_hash_index",
     "load_vbmeta",
     "parse_footer",

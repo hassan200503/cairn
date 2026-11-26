@@ -302,9 +302,14 @@ def test_plan_dry_run(tmp_path, capsys) -> None:
     exit_code = main(["plan", str(package), "--index", str(index)])
 
     output = capsys.readouterr().out
-    assert exit_code == EXIT_OK
+    assert exit_code == EXIT_UNKNOWN
     assert "plan:" in output
-    assert "executable: TRUE" in output
+    assert "structurally executable: TRUE" in output
+    assert "safety verdict: UNKNOWN" in output
+    assert "safety blocking:" in output
+    for rule_id in ("SR-001", "SR-003", "SR-004", "SR-012", "SR-013"):
+        assert rule_id in output
+    assert "executable: FALSE" in output
     assert "steps: 3" in output
     assert "read-only dry run" in output
 
@@ -316,7 +321,7 @@ def test_plan_wipe_includes_erase(tmp_path, capsys) -> None:
     exit_code = main(["plan", str(package), "--index", str(index), "--wipe"])
 
     output = capsys.readouterr().out
-    assert exit_code == EXIT_OK
+    assert exit_code == EXIT_UNKNOWN
     assert "steps: 4" in output
     assert "erase metadata" in output
 
@@ -328,8 +333,17 @@ def test_plan_json_is_machine_readable(tmp_path, capsys) -> None:
     exit_code = main(["plan", str(package), "--index", str(index), "--json"])
 
     payload = json.loads(capsys.readouterr().out)
-    assert exit_code == EXIT_OK
-    assert payload["executable"] is True
+    assert exit_code == EXIT_UNKNOWN
+    assert payload["structurally_executable"] is True
+    assert payload["executable"] is False
+    assert payload["safety"]["verdict"] == "UNKNOWN"
+    assert set(payload["safety"]["blocking"]) == {
+        "SR-001",
+        "SR-003",
+        "SR-004",
+        "SR-012",
+        "SR-013",
+    }
     assert len(payload["plan_sha256"]) == 64
     assert len(payload["steps"]) == 3
 
@@ -338,12 +352,18 @@ def test_plan_hash_is_stable_across_runs(tmp_path, capsys) -> None:
     package = _write_plan_package(tmp_path / "factory.zip")
     index = _write_index_for(package, tmp_path / "index.json")
 
-    assert main(["plan", str(package), "--index", str(index), "--json"]) == EXIT_OK
-    first = json.loads(capsys.readouterr().out)["plan_sha256"]
-    assert main(["plan", str(package), "--index", str(index), "--json"]) == EXIT_OK
-    second = json.loads(capsys.readouterr().out)["plan_sha256"]
+    assert main(["plan", str(package), "--index", str(index), "--json"]) == EXIT_UNKNOWN
+    first_payload = json.loads(capsys.readouterr().out)
+    first = first_payload["plan_sha256"]
+    assert main(["plan", str(package), "--index", str(index), "--json"]) == EXIT_UNKNOWN
+    second_payload = json.loads(capsys.readouterr().out)
+    second = second_payload["plan_sha256"]
 
     assert first == second
+    assert (
+        first_payload["safety"]["evidence_snapshot_sha256"]
+        == second_payload["safety"]["evidence_snapshot_sha256"]
+    )
 
 
 def test_plan_unknown_package_is_not_executable(tmp_path, capsys) -> None:
@@ -360,6 +380,23 @@ def test_plan_unknown_package_is_not_executable(tmp_path, capsys) -> None:
     assert exit_code == EXIT_UNKNOWN
     assert "executable: FALSE" in output
     assert "not in the local index" in output
+
+
+def test_plan_hash_mismatch_is_a_safety_false(tmp_path, capsys) -> None:
+    package = _write_plan_package(tmp_path / "factory.zip")
+    index = _write_index_for(package, tmp_path / "index.json")
+    payload = json.loads(index.read_text(encoding="utf-8"))
+    payload["packages"][0]["entries"]["boot.img"] = "0" * 64
+    index.write_text(json.dumps(payload), encoding="utf-8")
+
+    exit_code = main(["plan", str(package), "--index", str(index), "--json"])
+
+    result = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_UNKNOWN
+    assert result["safety"]["verdict"] == "FALSE"
+    assert "SR-002" in result["safety"]["blocking"]
+    sr002 = next(rule for rule in result["safety"]["rules"] if rule["rule_id"] == "SR-002")
+    assert sr002["state"] == "FALSE"
 
 
 def test_plan_missing_fastboot_info_fails(tmp_path, capsys) -> None:
@@ -460,7 +497,7 @@ def test_avb_digest_malformed_chain_is_usage_error(capsys) -> None:
 
 def test_avb_without_subcommand_is_usage_error(capsys) -> None:
     assert main(["avb"]) == EXIT_USAGE
-    assert "choose 'info', 'digest', or 'verify'" in capsys.readouterr().err
+    assert "choose 'info', 'digest', 'verify', or 'key-check'" in capsys.readouterr().err
 
 
 def test_avb_malformed_image_fails(tmp_path, capsys) -> None:
@@ -539,6 +576,100 @@ def test_avb_verify_missing_key_fails(tmp_path, capsys) -> None:
 
     assert exit_code == EXIT_FAILED
     assert "not found" in capsys.readouterr().err
+
+
+def test_avb_key_check_locked_matching_key_is_true(capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "key-check",
+            str(SIGNED_AVB_FIXTURE),
+            "--key",
+            str(SIGNED_AVB_KEY),
+            "--lock-state",
+            "locked",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "key trust: TRUE" in output
+    assert "lock state: locked" in output
+    assert "caller-supplied" in output
+    assert "read-only" in output
+
+
+def test_avb_key_check_locked_mismatched_key_is_false(tmp_path, capsys) -> None:
+    wrong_key = tmp_path / "wrong.avbpubkey"
+    wrong_key.write_bytes(SIGNED_AVB_KEY.read_bytes()[:-1] + b"\x00")
+
+    exit_code = main(
+        [
+            "avb",
+            "key-check",
+            str(SIGNED_AVB_FIXTURE),
+            "--key",
+            str(wrong_key),
+            "--lock-state",
+            "locked",
+        ]
+    )
+
+    assert exit_code == EXIT_FAILED
+    assert "key trust: FALSE" in capsys.readouterr().out
+
+
+def test_avb_key_check_unknown_lock_state_is_unknown_json(capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "key-check",
+            str(SIGNED_AVB_FIXTURE),
+            "--key",
+            str(SIGNED_AVB_KEY),
+            "--lock-state",
+            "unknown",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_UNKNOWN
+    assert payload["state"] == "UNKNOWN"
+    assert payload["lock_state"] == "unknown"
+    assert payload["key_matches"] is True
+
+
+def test_avb_key_check_unsigned_image_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "key-check",
+            str(AVB_FIXTURE),
+            "--key",
+            str(SIGNED_AVB_KEY),
+            "--lock-state",
+            "locked",
+        ]
+    )
+
+    assert exit_code == EXIT_UNKNOWN
+    assert "key trust: UNKNOWN" in capsys.readouterr().out
+
+
+def test_avb_key_check_missing_trusted_key_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "avb",
+            "key-check",
+            str(SIGNED_AVB_FIXTURE),
+            "--lock-state",
+            "locked",
+        ]
+    )
+
+    assert exit_code == EXIT_UNKNOWN
+    assert "no trusted key" in capsys.readouterr().out
 
 
 SIGNED_BOOT_FIXTURE = Path(__file__).parent / "fixtures" / "avb" / "signed_boot.img"

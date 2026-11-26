@@ -111,6 +111,12 @@ The replacement rule:
 Exact `avbtool` flags are pinned in M2 against the AOSP version in use; the rule is
 chain-following plus digest comparison, not a hand-rolled descriptor walk.
 
+Until a device-specific lock-state probe and trusted-key binding have a hardware
+finding or signed catalog source, an operator-supplied lock-state value is only
+context for offline inspection. `cairn avb key-check` may compare that value and a
+caller-supplied AVB key with a VBMeta signature, but its result is not device
+evidence and cannot satisfy SR-013 or authorize a write.
+
 Source: AOSP AVB 2.0 README [AOSP-AVB]. Lock-state handling is confirmed per device
 by hardware finding.
 
@@ -398,6 +404,11 @@ not silently fall down the ladder; each step down is a decision with a reason.
 - The fallback plan is computed before the first write.
 - The plan hash covers every operation, argument, tool version, and expected effect.
 - Dry-run renders the plan and evidence without touching the device.
+- A structurally complete plan is not authorization. The final executable decision
+  requires a separate Safety Engine report; its evidence snapshot is carried beside,
+  not folded into, the structural plan hash for later approval binding.
+- Missing identity, AVB, rollback, tool, or lock/key evidence remains `UNKNOWN` and
+  blocks. The planner may not manufacture a substitute fact from package structure.
 
 ### 3.5 Executor and journal
 
