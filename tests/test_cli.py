@@ -9,6 +9,12 @@ from cairn.cli import EXIT_FAILED, EXIT_OK, EXIT_UNKNOWN, EXIT_USAGE, main
 from cairn.package.archive import load_package
 
 TRANSCRIPT = Path(__file__).parent / "fixtures" / "fastboot" / "pixel8_getvar_all.json"
+STORED_TRANSCRIPT = (
+    Path(__file__).parent / "fixtures" / "fastboot" / "legion_y700_stored_indexes.json"
+)
+PIXEL_STORED_TRANSCRIPT = (
+    Path(__file__).parent / "fixtures" / "fastboot" / "pixel2_stored_indexes.json"
+)
 
 
 def test_version_command(capsys) -> None:
@@ -816,3 +822,211 @@ def test_rollback_check_warns_that_chain_signatures_are_not_checked(capsys) -> N
     output = capsys.readouterr().out
     assert exit_code == EXIT_OK
     assert "chain images are parsed, not signature-checked" in output
+
+
+def test_rollback_read_simulated_reports_vendor_indexes(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "read",
+            "--simulate",
+            str(STORED_TRANSCRIPT),
+            "--serial",
+            "SIMIDX",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "SIMULATED" in output
+    assert "stored index read: complete" in output
+    assert "location 0 = 1" in output
+    assert "location 3 = 3" in output
+    assert f"location 5 = {int('66D8F480', 16)}" in output
+    assert "not AVB verification" in output
+    assert "no device writes" in output
+
+
+def test_rollback_read_simulated_json_is_machine_readable(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "read",
+            "--simulate",
+            str(STORED_TRANSCRIPT),
+            "--serial",
+            "SIMIDX",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["state"] == "TRUE"
+    assert payload["simulated"] is True
+    assert payload["tool_ok"] is True
+    assert payload["indexes"][0]["location"] == 0
+    assert payload["indexes"][0]["value"] == 1
+    assert payload["oem_signals"][0]["name"] == "ap-ar-s"
+
+
+def test_rollback_read_without_vendor_variable_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "read",
+            "--simulate",
+            str(TRANSCRIPT),
+            "--serial",
+            "SIM123",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "stored index read: UNKNOWN" in output
+    assert "no stored rollback index variable" in output
+
+
+def test_rollback_read_missing_fastboot_is_a_usage_error(tmp_path, capsys) -> None:
+    missing = tmp_path / "no-fastboot.exe"
+    exit_code = main(["rollback", "read", "--fastboot", str(missing)])
+
+    assert exit_code == EXIT_USAGE
+    assert "not found" in capsys.readouterr().err
+
+
+def test_rollback_check_device_uses_simulated_stored_indexes(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--device",
+            "--simulate",
+            str(STORED_TRANSCRIPT),
+            "--serial",
+            "SIMIDX",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "avb:main: TRUE" in output
+    assert "avb:boot: TRUE" in output
+    assert "stored index read: complete" in output
+    assert "read-only: getvar only; no device writes" in output
+
+
+def test_rollback_check_device_accepts_pixel_style_variable(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--device",
+            "--simulate",
+            str(PIXEL_STORED_TRANSCRIPT),
+            "--serial",
+            "SIMPIX2",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "avb:main: TRUE" in output
+    assert "avb:boot: TRUE" in output
+
+
+def test_rollback_check_device_without_vendor_variable_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--device",
+            "--simulate",
+            str(TRANSCRIPT),
+            "--serial",
+            "SIM123",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "stored index read: UNKNOWN" in output
+    assert "no stored rollback index variable" in output
+
+
+def test_rollback_check_device_tool_failure_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--device",
+            "--simulate",
+            str(TRANSCRIPT),
+            "--serial",
+            "BAD",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "stored index read: UNKNOWN" in output
+    assert "were not read" in output
+
+
+def test_rollback_check_device_json_includes_read(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--device",
+            "--simulate",
+            str(STORED_TRANSCRIPT),
+            "--serial",
+            "SIMIDX",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["state"] == "TRUE"
+    assert payload["simulated"] is True
+    assert payload["device_read"]["state"] == "TRUE"
+    assert len(payload["device_read"]["indexes"]) == 3
+
+
+def test_rollback_check_device_and_stored_is_a_usage_error(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--device",
+            "--stored",
+            "0=1",
+        ]
+    )
+
+    assert exit_code == EXIT_USAGE
+    assert "choose either --device or --stored" in capsys.readouterr().err
+
+
+def test_rollback_check_device_flags_require_device(capsys) -> None:
+    exit_code = main(["rollback", "check", str(CHAIN_TOP), "--serial", "SIMIDX"])
+
+    assert exit_code == EXIT_USAGE
+    assert "require --device" in capsys.readouterr().err

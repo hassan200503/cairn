@@ -112,8 +112,12 @@ stored counter is known and the package is not lower.
 **UNKNOWN:** package may lower a counter and the stored index is unknown. Hard stop;
 catalog proof only. No override (ADR-021).
 **Source:** [AOSP-AVB], OEM catalog quirk with HF ID.
+**Device read:** only the observed vendor-specific getvar forms are parsed. An
+absent variable, conflict, malformed or empty value, truncated output, or failed
+command is `UNKNOWN`. OEM signals such as `ap-ar-s` are not AVB locations and are
+never mapped to one (ADR-022, KU-030).
 **Test:** known-safe, definitely-lower, unknown index, per-slot index difference,
-OEM counter unknown.
+OEM counter unknown, vendor variable absent, conflicting values, malformed value.
 
 ### SR-005 - Battery threshold
 

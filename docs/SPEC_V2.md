@@ -433,6 +433,12 @@ Decision:
 Unknown stored index plus a package that might lower it is a hard stop. This is the
 single most important anti-brick rule.
 
+Device reads are best-effort and vendor-specific. AOSP fastboot has no standard
+stored-rollback getvar. Cairn parses only the observed vendor forms and treats
+absence, conflict, malformed output, truncation, or tool failure as `UNKNOWN`. OEM
+signals such as `ap-ar-s` are reported but never mapped to AVB locations. A
+successful read is a device claim, not AVB verification.
+
 ### 3.7 Recovery Kit and Critical Partition Vault
 
 Before any bootchain write on a device without a safe A/B bootloader:

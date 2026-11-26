@@ -74,6 +74,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   prove a downgrade. An unknown stored index is UNKNOWN and a hard stop, never
   overridable. Chain images are parsed but not signature-checked; SR-003 is
   separate. No OEM counter policy ships yet.
+- Vendor-specific device stored-index reader and `cairn rollback read` /
+  `cairn rollback check --device`: one read-only `fastboot getvar all`, parsing
+  the observed `stored_rollback_index:<location> = <value>` and
+  `avb_stored_rollback_indexes:<location>:<value>` forms. Duplicate identical
+  values are accepted once; conflicts, malformed or empty values, absent
+  variables, truncated output, and failed commands are unresolved and UNKNOWN.
+  OEM signals such as `ap-ar-s` are warnings and are never mapped to AVB
+  locations. AOSP fastboot has no standard variable for this value.
 - Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
   inferred/stale refusal, verified JSON serialization, and property tests.
 - Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,
@@ -87,6 +95,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   driver enumeration, and USB topology depth are pending.
 - The sparse oracle skips locally when libsparse is absent; CI enforces it.
 - The fastboot adapter has not yet run against real hardware.
+- Device stored-index reading is vendor-specific and fixture-backed only; no real
+  scrubbed transcript exists, some SKUs need an EDL fallback, and Pixel `ap-ar-s`
+  is not mapped to AVB locations.
 - Sparse oracle, fastboot-info, and the AOSP fastboot source findings are verified
   against pinned primary sources, but device-dependent behavior remains hypothesis.
 - No hardware findings yet.

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "device": {
+    "name": "Synthetic Pixel-style stored-index fixture",
+    "note": "Fabricated values for tests and demos. This is not a real device transcript.",
+    "created": "2026-11-26"
+  },
+  "steps": [
+    {
+      "argv": ["-s", "SIMPIX2", "getvar", "all"],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "(bootloader) product:simulated-pixel\n(bootloader) serialno:SIMPIX2\n(bootloader) current-slot:a\n(bootloader) avb_stored_rollback_indexes:0:1\n(bootloader) avb_stored_rollback_indexes:3:3\n"
+    }
+  ]
+}

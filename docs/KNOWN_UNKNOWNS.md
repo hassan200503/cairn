@@ -1,6 +1,6 @@
 # Known Unknowns
 
-**Status as of 2026-11-24.** No item here may be quietly assumed in code. If a fact is
+**Status as of 2026-11-26.** No item here may be quietly assumed in code. If a fact is
 unknown, the rule result is `UNKNOWN`, and `UNKNOWN` blocks.
 
 | ID | Unknown | Impact | How to resolve | Gate |
@@ -34,7 +34,7 @@ unknown, the rule result is `UNKNOWN`, and `UNKNOWN` blocks.
 | KU-027 | Source, signing, and rotation of the local vendor hash index | Index can be stale or tampered; a match is not authenticity | Vendor artifact hashes, signed catalog design | M2/M11 |
 | KU-028 | Per-device slot resolution and fallback sequencing for planner v0 | Non-executable or wrong plan | Hardware findings, fastboot differential tests | M3/M6 |
 | KU-029 | AVB trust establishment: a lock-state-aware key check. Embedded-key signature checks, footer-embedded VBMeta parsing, chain-of-trust key matching, and the rollback comparator exist, but no key is anchored to a device | A self-consistent image can be mistaken for a trusted one | `avbtool` chain corpus, bootloader key findings | M2/T09 |
-| KU-030 | How to obtain a device's stored rollback indexes in the field, and the per-OEM counter policies (Xiaomi ARB values, Samsung SWREV and binary version, Qualcomm fuse counters) | The Rollback Oracle stays UNKNOWN on a real device, so SR-004 blocks every job | Vendor documentation, hardware findings, signed catalog | M4/T12 |
+| KU-030 | Generic acquisition of a device's stored rollback indexes and the per-OEM counter policies. A vendor-specific reader now parses observed `stored_rollback_index` and `avb_stored_rollback_indexes` getvar forms, but AOSP fastboot has no standard variable, some SKUs need an EDL path, and Pixel `ap-ar-s` is an OEM fuse count with no known AVB mapping (Xiaomi ARB, Samsung SWREV/binary version, Qualcomm fuses remain unknown) | SR-004 can be TRUE only on devices exposing an observed AVB variable; devices without one, and all OEM counters, stay UNKNOWN and block | Vendor documentation, real scrubbed transcripts, hardware findings, signed catalog; EDL fallback as a separate GPL process | M4/T12 |
 
 ---
 

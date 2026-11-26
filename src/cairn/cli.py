@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from cairn import __version__
@@ -47,6 +48,10 @@ from cairn.provenance.hash_index import (
     ProvenanceResult,
     load_hash_index,
     verify_manifest,
+)
+from cairn.rollback.device import (
+    DeviceRollbackRead,
+    read_stored_rollback_indexes,
 )
 from cairn.rollback.oracle import (
     MAX_ROLLBACK_INDEX,
@@ -268,12 +273,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     rollback = subparsers.add_parser(
         "rollback",
-        help="check whether a package can lower a rollback counter",
+        help="read or check rollback counters",
     )
     rollback_sub = rollback.add_subparsers(dest="rollback_command", metavar="subcommand")
     rollback_check = rollback_sub.add_parser(
         "check",
-        help="compare a package's rollback indexes with the device's stored values",
+        help="compare a package's rollback indexes with stored values",
     )
     rollback_check.add_argument("image", type=Path, help="VBMeta image")
     rollback_check.add_argument(
@@ -288,7 +293,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="LOCATION=VALUE",
-        help="device stored rollback index for a location; repeat per location",
+        help="caller-supplied stored rollback index; repeat per location",
+    )
+    rollback_check.add_argument(
+        "--device",
+        action="store_true",
+        help="read stored indexes from the device with read-only fastboot getvar all",
+    )
+    rollback_check.add_argument(
+        "--fastboot",
+        type=Path,
+        help="path to the official fastboot executable (with --device)",
+    )
+    rollback_check.add_argument(
+        "--serial",
+        help="target device serial for the read (with --device)",
+    )
+    rollback_check.add_argument(
+        "--simulate",
+        type=Path,
+        metavar="TRANSCRIPT",
+        help="replay a transcript for the device read instead of touching hardware",
     )
     rollback_check.add_argument(
         "--slot",
@@ -296,6 +321,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="slot the stored values belong to",
     )
     rollback_check.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
+    rollback_read = rollback_sub.add_parser(
+        "read",
+        help="read vendor-reported stored rollback indexes (read-only)",
+    )
+    rollback_read.add_argument(
+        "--fastboot",
+        type=Path,
+        help="path to the official fastboot executable (default: CAIRN_FASTBOOT or PATH)",
+    )
+    rollback_read.add_argument(
+        "--serial",
+        help="target device serial; omit to let fastboot choose",
+    )
+    rollback_read.add_argument(
+        "--simulate",
+        type=Path,
+        metavar="TRANSCRIPT",
+        help="replay a recorded transcript instead of touching hardware",
+    )
+    rollback_read.add_argument(
+        "--slot",
+        default=None,
+        help="slot label for the reported values",
+    )
+    rollback_read.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -872,36 +927,145 @@ def _print_vbmeta(image: VbmetaImage) -> None:
 
 
 def _run_rollback(args: argparse.Namespace) -> int:
+    if args.rollback_command == "read":
+        return _run_rollback_read(args)
     if args.rollback_command != "check":
-        print("cairn rollback: choose 'check'", file=sys.stderr)
+        print("cairn rollback: choose 'check' or 'read'", file=sys.stderr)
+        return EXIT_USAGE
+
+    if args.device and args.stored:
+        print("cairn rollback check: choose either --device or --stored", file=sys.stderr)
+        return EXIT_USAGE
+    if not args.device and (
+        args.fastboot is not None or args.serial is not None or args.simulate is not None
+    ):
+        print(
+            "cairn rollback check: --fastboot, --serial, and --simulate require --device",
+            file=sys.stderr,
+        )
         return EXIT_USAGE
 
     chain_paths = _parse_chain_paths(args.chain, "cairn rollback check")
     if chain_paths is None:
         return EXIT_USAGE
-    stored = _parse_stored_indexes(args.stored, "cairn rollback check")
-    if stored is None:
-        return EXIT_USAGE
+
+    stored: dict[int, int] | None = None
+    if not args.device:
+        stored = _parse_stored_indexes(args.stored, "cairn rollback check")
+        if stored is None:
+            return EXIT_USAGE
+
+    device_read: DeviceRollbackRead | None = None
+    tool: dict[str, object] | None = None
+    simulated = False
 
     try:
         image = load_vbmeta(args.image)
         chain = _load_chain_images(chain_paths)
+        if args.device:
+            setup = _prepare_fastboot(args, command="cairn rollback check")
+            if setup is None:
+                return EXIT_USAGE
+            client, tool, simulated = setup
+            device_read = read_stored_rollback_indexes(
+                client,
+                serial=args.serial,
+                slot=args.slot,
+            )
+            stored = device_read.stored
+        stored_source = (
+            "fastboot getvar all" if args.device else ("device" if stored else "unknown")
+        )
         report = evaluate_avb_rollback(
             image,
             chain,
             slot=args.slot,
             stored=stored,
-            stored_source="device" if stored else "unknown",
+            stored_source=stored_source,
         )
+        if device_read is not None:
+            extra = device_read.warnings + device_read.unresolved
+            if extra:
+                report = replace(report, warnings=report.warnings + extra)
     except (AvbError, RollbackError) as exc:
         print(f"cairn rollback check: {exc}", file=sys.stderr)
         return EXIT_UNKNOWN
 
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
+        payload = report.to_dict()
+        if device_read is not None:
+            payload["device_read"] = device_read.to_dict()
+            payload["tool"] = tool
+            payload["simulated"] = simulated
+        print(json.dumps(payload, indent=2))
     else:
-        _print_rollback_report(report, chain_supplied=bool(chain_paths))
+        _print_rollback_report(
+            report,
+            chain_supplied=bool(chain_paths),
+            device_read=device_read,
+        )
     return _exit_code_for_tri(report.state)
+
+
+def _run_rollback_read(args: argparse.Namespace) -> int:
+    setup = _prepare_fastboot(args, command="cairn rollback read")
+    if setup is None:
+        return EXIT_USAGE
+    client, tool, simulated = setup
+    read = read_stored_rollback_indexes(client, serial=args.serial, slot=args.slot)
+
+    if args.json:
+        payload: dict[str, object] = {
+            "tool": tool,
+            "simulated": simulated,
+            **read.to_dict(),
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_rollback_read(read, simulated=simulated)
+    return EXIT_OK if read.state is Tri.TRUE else EXIT_UNKNOWN
+
+
+def _prepare_fastboot(
+    args: argparse.Namespace,
+    *,
+    command: str,
+) -> tuple[FastbootClient, dict[str, object], bool] | None:
+    runner = ToolRunner()
+    if args.simulate is not None:
+        prefix = (sys.executable, "-m", "cairn.sim.fastboot_sim")
+        extra_env = {TRANSCRIPT_ENV: str(args.simulate)}
+        tool: dict[str, object] = {
+            "kind": "simulated",
+            "transcript": str(args.simulate),
+            "manifest_ok": None,
+            "simulated": True,
+        }
+        return FastbootClient(prefix, runner=runner, extra_env=extra_env), tool, True
+
+    fastboot = _resolve_fastboot(args.fastboot)
+    if fastboot is None:
+        print(
+            f"{command}: fastboot not found; pass --fastboot or set CAIRN_FASTBOOT",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        report = TOOL_MANIFEST.verify("fastboot", fastboot, runner)
+    except ToolError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+    tool = {
+        "kind": "fastboot",
+        "path": str(report.path),
+        "version": report.version,
+        "sha256": report.sha256,
+        "license": report.license,
+        "manifest_ok": report.ok,
+        "manifest_detail": report.detail,
+        "simulated": False,
+    }
+    return FastbootClient((str(fastboot),), runner=runner), tool, False
 
 
 def _parse_stored_indexes(specs: list[str], command: str) -> dict[int, int] | None:
@@ -936,7 +1100,36 @@ def _parse_stored_indexes(specs: list[str], command: str) -> dict[int, int] | No
     return values
 
 
-def _print_rollback_report(report: RollbackReport, *, chain_supplied: bool) -> None:
+def _print_rollback_read(read: DeviceRollbackRead, *, simulated: bool) -> None:
+    suffix = " (SIMULATED)" if simulated else ""
+    print(f"cairn rollback read: read-only fastboot getvar all{suffix}")
+    if read.serial is not None:
+        print(f"serial: {read.serial}")
+    if read.slot is not None:
+        print(f"slot: {read.slot}")
+    state = "complete" if read.state is Tri.TRUE else "UNKNOWN"
+    print(f"stored index read: {state}")
+    if read.indexes:
+        print(f"indexes: {len(read.indexes)}")
+        for index in read.indexes:
+            print(f"  location {index.location} = {index.value} ({index.variable})")
+    else:
+        print("indexes: none")
+    for warning in read.warnings:
+        print(f"warning: {warning}")
+    for item in read.unresolved:
+        print(f"unresolved: {item}")
+    print(f"detail: {read.detail}")
+    print("note: a device read is a claim, not AVB verification")
+    print("read-only: no device writes")
+
+
+def _print_rollback_report(
+    report: RollbackReport,
+    *,
+    chain_supplied: bool,
+    device_read: DeviceRollbackRead | None = None,
+) -> None:
     print(f"findings: {len(report.findings)}")
     for finding in report.findings:
         location = "unknown" if finding.location is None else str(finding.location)
@@ -947,11 +1140,19 @@ def _print_rollback_report(report: RollbackReport, *, chain_supplied: bool) -> N
         )
     for warning in report.warnings:
         print(f"  warning: {warning}")
+    if device_read is not None:
+        state = "complete" if device_read.state is Tri.TRUE else "UNKNOWN"
+        print(
+            f"stored index read: {state} ({len(device_read.indexes)} indexes; {device_read.detail})"
+        )
     print(f"verdict: {_tri_label(report.state)} - {_rollback_verdict(report.state)}")
     if chain_supplied:
         print("note: chain images are parsed, not signature-checked; use avb verify --chain")
     print("note: an UNKNOWN verdict is a hard stop for SR-004, not a warning")
-    print("read-only: no device access")
+    if device_read is not None:
+        print("read-only: getvar only; no device writes")
+    else:
+        print("read-only: no device access")
 
 
 def _rollback_verdict(state: Tri) -> str:

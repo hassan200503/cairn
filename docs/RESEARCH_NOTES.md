@@ -252,3 +252,26 @@ files were verified blob-for-blob against the Gitiles tree listing with
   `vendor_boot` fetch case can reach V2.
 - Tool pinning: platform-tools 37.0.3 hash is recorded above; the Windows USB
   driver package is r13. These are host artifacts, not device facts.
+
+### 6.6 Vendor stored-index getvar observations
+
+AOSP fastboot has no standard stored-rollback-index variable. Field reports show
+vendor-specific forms in `getvar all`:
+
+- `(bootloader) stored_rollback_index:<location> = <value>` on some Lenovo Legion
+  Y700 Gen 3 builds, with values such as `66D8F480` (hex).
+- `(bootloader) avb_stored_rollback_indexes:<location>:<value>` on some Pixel 2 /
+  GrapheneOS builds, with values such as `0:1577836800` (decimal). Some reports
+  show an empty `avb_stored_rollback_indexes:`.
+- Some SKUs do not expose the value in fastboot at all; LTBox commit `b2771fb`
+  documents falling back to an EDL dump of `boot` and `vbmeta_system`, which must
+  be active-slot aware:
+  <https://github.com/miner7222/LTBox/commit/b2771fbc61417a94d2b2836c5b1ff734a9850744>.
+- Pixel 6/8 `fastboot getvar ap-ar-s` reports an OEM anti-rollback fuse count
+  (for example `2`). It is not an AVB stored rollback index and has no known
+  location mapping:
+  <https://droidwin.com/how-to-check-anti-rollback-index-on-pixel-devices/>.
+
+Consequence: Cairn parses only the observed AVB forms, treats absence or ambiguity
+as UNKNOWN, and never maps an OEM signal to an AVB location. A generic AOSP method
+does not exist; EDL remains a separate GPL process and is not implemented.

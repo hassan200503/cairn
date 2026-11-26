@@ -252,9 +252,14 @@ authoritative when it can be read; otherwise a catalog bound can prove safety
 (upper bound) or prove a downgrade (lower bound); an unknown stored value is
 UNKNOWN, a hard stop, and never overridable. `cairn rollback check` exposes the
 check with `--chain` and `--stored LOCATION=VALUE`; it parses chain images but
-does not verify their signatures. Pending: a real way to read a device's stored
-rollback indexes, OEM counter policy, OTA downgrade metadata evaluation, and
-wiring the oracle result into SR-004 and the plan path.
+does not verify their signatures. `cairn rollback read` and
+`rollback check --device` add a vendor-specific stored-index reader for the
+observed `stored_rollback_index` and `avb_stored_rollback_indexes` getvar forms;
+absence, conflicts, malformed values, truncation, or a failed command are
+UNKNOWN, and OEM signals such as `ap-ar-s` are warnings rather than AVB indexes.
+Pending: a generic AOSP path, an EDL fallback, real scrubbed transcripts, OEM
+counter policy, OTA downgrade metadata evaluation, and wiring the oracle result
+into SR-004 and the plan path.
 
 ### T13 - Approval binding
 

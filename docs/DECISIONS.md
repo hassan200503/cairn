@@ -18,6 +18,14 @@ Decisions are append-only. To change one, add a new ADR that supersedes it.
 | ADR-012 | Distribution name `cairn-flash`, import package `cairn`, CLI `cairn` | Accepted | 2026-11-24 |
 | ADR-013 | Every evidence item carries source, observation time, and freshness | Accepted | 2026-11-24 |
 | ADR-014 | Approval is a consistency boundary, not a security boundary against a compromised host | Accepted | 2026-11-24 |
+| ADR-015 | Package archives are untrusted and are never extracted | Accepted | 2026-11-25 |
+| ADR-016 | A local hash-index match is a signal, not a signature | Accepted | 2026-11-25 |
+| ADR-017 | Planner v0 never reorders or guesses | Accepted | 2026-11-25 |
+| ADR-018 | AVB parsing is not AVB verification | Accepted | 2026-11-25 |
+| ADR-019 | Embedded-key signature validity is not trust | Accepted | 2026-11-25 |
+| ADR-020 | Chain verification is a consistency gate, not a trust gate | Accepted | 2026-11-26 |
+| ADR-021 | Rollback verdicts use the documented inequality; unknown is a hard stop | Accepted | 2026-11-26 |
+| ADR-022 | Device stored-index reads are vendor-specific claims, not AVB verification | Accepted | 2026-11-26 |
 
 ---
 
@@ -348,3 +356,34 @@ as unresolved. It parses chain images but does not verify their signatures; SR-0
 must pass separately. It cannot yet produce a TRUE verdict on a real device,
 because nothing reads the stored indexes; that gap is tracked as KU-030 and
 blocks SR-004 until it is closed.
+
+---
+
+## ADR-022 - Device stored-index reads are vendor-specific claims, not AVB verification
+
+**Context.** The Rollback Oracle needs the device's `stored_rollback_index[n]`,
+but AOSP fastboot does not define a standard getvar for it. Devices that expose
+the value do so through vendor-specific variables with different names and
+formats. Observed examples include `stored_rollback_index:5 = 0` and
+`avb_stored_rollback_indexes:0:1577836800`. Some devices expose only an OEM
+anti-rollback signal such as `ap-ar-s`, whose mapping to AVB locations is unknown.
+Some SKUs expose nothing and need a separate EDL path.
+
+**Decision.** Add a narrow, read-only device reader in `rollback/device.py` and
+expose it as `cairn rollback read` and `cairn rollback check --device`. It runs
+one `fastboot getvar all`, parses only the observed AVB stored-index forms, accepts
+decimal values or hex values prefixed with `0x` or containing `A-F`, and rejects
+everything else as unresolved. Duplicate identical locations are accepted once;
+conflicting, empty, malformed, out-of-range, absent, or truncated values are
+unresolved. A failed command produces no trusted indexes. OEM anti-rollback
+signals are recorded as warnings and are never mapped to AVB locations. The read
+is a device claim; it is not AVB signature verification, and SR-003 remains a
+separate gate. `--device` and `--stored` are mutually exclusive so provenance is
+unambiguous. The reader never writes to the device.
+
+**Consequences.** SR-004 can now be evaluated with device-reported AVB indexes on
+devices that expose one of the observed variables, and it stays UNKNOWN
+everywhere else. A successful read does not make a package safe; the oracle still
+applies the AOSP inequality. OEM counter policy, the Pixel `ap-ar-s` mapping, and
+the EDL fallback remain unresolved (KU-005, KU-009, KU-030). A TRUE verdict from
+`rollback check --device` covers only the AVB counters that were evaluated.
