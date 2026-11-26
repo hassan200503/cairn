@@ -287,9 +287,8 @@ uv run mypy src                # clean
 uv run pytest -q               # 419 passed, 2 skipped
 ```
 
-The latest CI run for a pushed commit is `45779005644` for `82280e8` and is
-green. The T12 device-reader changes are local and have not been pushed or run
-through CI yet; the 419-test baseline above is local.
+The latest CI run for a pushed commit is `45819113387` for `9ff02bf` and is
+green. The 419-test baseline above was confirmed locally and in that run.
 
 The two local skips are environmental, not gaps in coverage:
 
