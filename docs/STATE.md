@@ -10,7 +10,7 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-25, after the AVB chain-of-trust slice.
+**Last updated:** 2026-11-26, after the Rollback Oracle v0 slice.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -23,7 +23,7 @@ If it gets stale, the next model will trust it and be wrong.
 1. [`STATE.md`](STATE.md) — this file.
 2. [`SPEC_V2.md`](SPEC_V2.md) — the reviewed v2 specification.
 3. [`SAFETY_RULES.md`](SAFETY_RULES.md) — rule IDs, defaults, provenance requirements.
-4. [`DECISIONS.md`](DECISIONS.md) — architecture decision records (ADR-001 … ADR-020).
+4. [`DECISIONS.md`](DECISIONS.md) — architecture decision records (ADR-001 … ADR-021).
 5. [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md) — everything not yet known.
 6. [`EXECUTION_PLAN.md`](EXECUTION_PLAN.md) — workstreams T01…T15.
 7. [`ROADMAP.md`](ROADMAP.md) — milestones M0…M12.
@@ -65,6 +65,7 @@ src/cairn/
   package/       fastboot-info v1 parser, factory/OTA zip inspection
   plan/          read-only vendor-order planner, canonical plan hash
   provenance/    offline vendor hash index, AVB parser, AVB chain verification
+  rollback/      rollback oracle: can this package lower a counter on this device?
   safety/        safety rule engine and override policy
   sim/           transcript schema, recorder/replayer, fault-injecting fastboot simulator
 ```
@@ -99,6 +100,7 @@ Design notes, in the order the reader should meet them:
 | `cairn avb info IMAGE` | parse VBMeta headers and descriptors | 0/1 |
 | `cairn avb digest IMAGE [--chain NAME=PATH]` | compute the AOSP VBMeta digest | 0/1/2 |
 | `cairn avb verify IMAGE [--key KEY] [--chain NAME=PATH]` | verify signature and, with `--chain`, the chain of trust | 0 valid / 1 invalid / 3 unknown |
+| `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE]` | compare package rollback counters with caller-supplied stored values | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 
 Exit code constants: `EXIT_OK=0`, `EXIT_FAILED=1`, `EXIT_USAGE=2`, `EXIT_UNKNOWN=3`.
 Every command supports `--json` where structured output makes sense.
@@ -156,6 +158,27 @@ Overall precedence is `FALSE` > `UNKNOWN` > `TRUE`. A `TRUE` chain result means
 "internally consistent", never "trusted", unless the top-level key was compared
 against an expected key.
 
+### Rollback Oracle semantics
+
+`evaluate_avb_rollback` and `cairn rollback check` answer a narrower question:
+can this package lower a rollback counter? The inequality is AOSP's
+`rollback_index[n] >= stored_rollback_index[n]` for every location `n`.
+
+- The top-level VBMeta contributes `avb:main` at its own location.
+- Each chain descriptor contributes `avb:<partition>` at the descriptor's
+  location, carrying the chained image's rollback index. Nested chains are
+  followed with a depth limit.
+- The caller supplies stored indexes; nothing in the repository reads them from a
+  device yet. A missing stored index is `UNKNOWN`, never `TRUE`.
+- Package below stored -> `FALSE`; package at or above stored -> `TRUE`.
+- An unreadable image or chain is `UNKNOWN`, never `FALSE`; a parse error is not
+  evidence of a downgrade.
+- Without a stored value, a catalog upper bound can prove safety, a catalog lower
+  bound can prove a downgrade, and an inconclusive bound leaves `UNKNOWN`.
+- `FALSE` and `UNKNOWN` are hard stops for SR-004; neither is overridable.
+- Chain images are parsed for counters, not signature-checked. SR-003 must pass
+  separately before the counters are trusted.
+
 ---
 
 ## 6. What is deliberately not claimed
@@ -165,6 +188,9 @@ These statements are enforced in code and in output text. Do not weaken them.
 - Parsing a VBMeta successfully is **not** verification (ADR-018).
 - A valid embedded-key signature is **not** trust (ADR-019).
 - A coherent chain is **not** a trust anchor without an expected key (ADR-020).
+- A rollback comparison is **not** a device read; stored indexes are caller-supplied
+  and an unknown value blocks (ADR-021, KU-030).
+- A rollback comparison does **not** verify chain signatures; SR-003 is separate.
 - A local hash index match is **not** a signature or authenticity check (ADR-016).
 - A simulated transcript is **not** device evidence; it is recorded with
   `EvidenceSource.INFERRED`.
@@ -240,7 +266,7 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 352 passed, 2 skipped
+uv run pytest -q               # 394 passed, 2 skipped
 ```
 
 The two local skips are environmental, not gaps in coverage:
@@ -286,8 +312,11 @@ These are the reasons the remaining work cannot simply be "finished":
   Pixel package may keep `fastboot-info.txt` inside the nested image zip.
 - **Slot, retrofit, and commutation semantics are unmodeled** (KU-028), so
   `cairn plan --slot other` and `--retrofit-force` stay non-executable by design.
-- **No rollback oracle.** Per-location rollback index comparison (T12) and the
-  lock-state-aware key check are unimplemented.
+- **No device stored-index reader.** The Rollback Oracle can compare counters, but
+  nothing reads `stored_rollback_index` from a device, so a real job stays
+  `UNKNOWN` and SR-004 blocks (KU-030). No OEM counter policy ships yet.
+- **No lock-state-aware key check.** Rung 6 of the AVB ladder is unimplemented
+  (KU-029).
 - **No Pixel verifier oracle.** `pixel_factory_image_verify.py` has not been
   run against our output.
 - **EDL, MediaTek, and Samsung backends** are research-only; no hardware, no
@@ -300,12 +329,10 @@ These are the reasons the remaining work cannot simply be "finished":
 Each is a self-contained slice: implement, test, update the docs above, commit,
 push, confirm CI green.
 
-1. **T12 — Rollback Oracle v0.** The AVB parser already exposes per-location
-   rollback indexes; the oracle needs stored-index inputs, catalog counters, and
-   OTA metadata hooks, and must return `TRUE`/`FALSE`/`UNKNOWN` with reasons.
-   Acceptance: an unknown stored index plus a possibly-lowering package is a
-   hard stop; known-safe and definitely-lowering cases are covered; no device
-   write is attempted in tests.
+1. **T12 — Device stored-index reader.** Find a supported way to read the
+   device's stored rollback indexes, or record the per-OEM path and leave the
+   result `UNKNOWN`. The oracle itself is landed; this closes KU-030 and makes
+   SR-004 actionable on real hardware.
 2. **T09 — Lock-state-aware key check.** Close rung 6 of the AVB ladder: decide
    authenticity from the device's lock state plus a known key, not from the
    embedded key.

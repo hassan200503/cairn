@@ -641,3 +641,178 @@ def test_avb_digest_chain_matches_aosp(capsys) -> None:
         capsys.readouterr().out.strip()
         == "4718daa501cd42cf97865a46b45cf52b205cd6f0a45a09f46c2a95363df9fb83"
     )
+
+
+def test_rollback_check_known_safe(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--stored",
+            "0=1",
+            "--stored",
+            "3=3",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "avb:main: TRUE" in output
+    assert "avb:boot: TRUE" in output
+    assert "verdict: TRUE" in output
+    assert "read-only" in output
+
+
+def test_rollback_check_unknown_stored_index_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "the stored index is unknown" in output
+    assert "verdict: UNKNOWN" in output
+    assert "hard stop for SR-004" in output
+
+
+def test_rollback_check_definite_lowering_is_failed(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--stored",
+            "0=1",
+            "--stored",
+            "3=9",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_FAILED
+    assert "avb:boot: FALSE" in output
+    assert "not overridable" in output
+
+
+def test_rollback_check_missing_chain_is_unknown(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"other={CHAIN_BOOT}",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_UNKNOWN
+    assert "could not be read" in output
+
+
+def test_rollback_check_json_is_machine_readable(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--stored",
+            "0=1",
+            "--stored",
+            "3=3",
+            "--json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["state"] == "TRUE"
+    assert payload["blocks"] is False
+    assert [finding["counter"] for finding in payload["findings"]] == ["avb:main", "avb:boot"]
+
+
+def test_rollback_check_malformed_stored_is_usage_error(capsys) -> None:
+    exit_code = main(["rollback", "check", str(CHAIN_TOP), "--stored", "zero"])
+
+    assert exit_code == EXIT_USAGE
+    assert "LOCATION=VALUE" in capsys.readouterr().err
+
+
+def test_rollback_check_duplicate_location_is_usage_error(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--stored",
+            "0=1",
+            "--stored",
+            "0=2",
+        ]
+    )
+
+    assert exit_code == EXIT_USAGE
+    assert "duplicate stored location" in capsys.readouterr().err
+
+
+def test_rollback_without_subcommand_is_usage_error(capsys) -> None:
+    assert main(["rollback"]) == EXIT_USAGE
+    assert "choose 'check'" in capsys.readouterr().err
+
+
+def test_rollback_check_rejects_oversized_stored_value(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--stored",
+            f"0={2**64}",
+        ]
+    )
+
+    assert exit_code == EXIT_USAGE
+    assert "64-bit rollback index limit" in capsys.readouterr().err
+
+
+def test_rollback_check_malformed_image_is_unknown(tmp_path, capsys) -> None:
+    image = tmp_path / "bad.img"
+    image.write_bytes(b"not an AVB image")
+
+    exit_code = main(["rollback", "check", str(image)])
+
+    assert exit_code == EXIT_UNKNOWN
+    assert "cairn rollback check" in capsys.readouterr().err
+
+
+def test_rollback_check_warns_that_chain_signatures_are_not_checked(capsys) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(CHAIN_TOP),
+            "--chain",
+            f"boot={CHAIN_BOOT}",
+            "--stored",
+            "0=1",
+            "--stored",
+            "3=3",
+        ]
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == EXIT_OK
+    assert "chain images are parsed, not signature-checked" in output

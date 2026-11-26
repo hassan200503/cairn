@@ -427,7 +427,7 @@ Decision:
 - Package cannot lower any counter: `TRUE`.
 - Package may lower a counter and the stored index is known and safe: `TRUE`.
 - Package may lower a counter and the stored index is unknown: `UNKNOWN`, hard stop
-  unless the catalog proves otherwise or the operator supplies a typed override.
+  unless the catalog proves otherwise. No override (ADR-020, ADR-021).
 - Package definitely lowers a counter: `FALSE`, never overridable.
 
 Unknown stored index plus a package that might lower it is a hard stop. This is the
@@ -549,8 +549,8 @@ Full details and test plans are in [SAFETY_RULES.md](SAFETY_RULES.md).
 | --- | --- | --- | --- | --- |
 | SR-001 | Device identity matches package | Block | Block | Unknown only, typed |
 | SR-002 | Package provenance | Block | Assist/override | Unknown only |
-| SR-003 | AVB chain and VBMeta digest | Block | Block | Unknown only, typed |
-| SR-004 | Rollback Oracle | Block | Block | Unknown only, typed |
+| SR-003 | AVB chain and VBMeta digest | Block | Block | No |
+| SR-004 | Rollback Oracle | Block | Block | No |
 | SR-005 | Battery above threshold | Block | Block | No |
 | SR-006 | Link soak passed | Block | Block | No |
 | SR-007 | Host power stable | Block | Block | Typed override |

@@ -87,11 +87,14 @@ Update the relevant doc in the same change:
 
 ## Current status
 
-- M0 in progress: scaffold, core tri-state/evidence, sparse format constants, and
-  tests landed.
-- Next: sparse oracle harness, subprocess wrapper, fastboot simulator, Host Doctor,
-  package parser.
-- No real-device writes. `cairn doctor` is a deliberate placeholder that exits 3.
+- The canonical snapshot is `docs/STATE.md`; read it first and update it in the
+  same commit as any change to what is implemented.
+- All commands are read-only. No real-device writes; the M6 gate and recovery
+  drill still come first.
+- The AVB parser, signature and chain checks, Rollback Oracle v0, safety engine,
+  planner, package inspection, hash index, Host Doctor, sparse validation, and
+  simulator have landed in slices. The next slice is a device stored-index reader
+  for T12, then the lock-state-aware key check for T09.
 
 ## Definition of done
 

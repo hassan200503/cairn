@@ -241,6 +241,20 @@ is `TRUE`/`FALSE`/`UNKNOWN` with reasons.
 known-safe and definitely-lowering cases are covered; no device write is attempted
 in tests.
 **Depends on:** T09, T11.
+**Status:** partial (2026-11-26). The Rollback Oracle v0 (`rollback/oracle.py`) applies
+the AOSP rollback inequality — the device rejects an image unless
+`rollback_index[n]` >= `stored_rollback_index[n]` for every location `n` — to the
+counters a VBMeta package declares, including chained partitions at the location
+named by the chain descriptor; nested chain descriptors are followed with a depth
+limit, and missing or malformed chained counters are unresolved. It returns a
+tri-state verdict with per-counter reasons. The device's stored value is
+authoritative when it can be read; otherwise a catalog bound can prove safety
+(upper bound) or prove a downgrade (lower bound); an unknown stored value is
+UNKNOWN, a hard stop, and never overridable. `cairn rollback check` exposes the
+check with `--chain` and `--stored LOCATION=VALUE`; it parses chain images but
+does not verify their signatures. Pending: a real way to read a device's stored
+rollback indexes, OEM counter policy, OTA downgrade metadata evaluation, and
+wiring the oracle result into SR-004 and the plan path.
 
 ### T13 - Approval binding
 

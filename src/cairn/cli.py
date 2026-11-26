@@ -48,6 +48,12 @@ from cairn.provenance.hash_index import (
     load_hash_index,
     verify_manifest,
 )
+from cairn.rollback.oracle import (
+    MAX_ROLLBACK_INDEX,
+    RollbackError,
+    RollbackReport,
+    evaluate_avb_rollback,
+)
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
@@ -260,6 +266,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit machine-readable output",
     )
 
+    rollback = subparsers.add_parser(
+        "rollback",
+        help="check whether a package can lower a rollback counter",
+    )
+    rollback_sub = rollback.add_subparsers(dest="rollback_command", metavar="subcommand")
+    rollback_check = rollback_sub.add_parser(
+        "check",
+        help="compare a package's rollback indexes with the device's stored values",
+    )
+    rollback_check.add_argument("image", type=Path, help="VBMeta image")
+    rollback_check.add_argument(
+        "--chain",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="chained partition image; repeat for multiple chains",
+    )
+    rollback_check.add_argument(
+        "--stored",
+        action="append",
+        default=[],
+        metavar="LOCATION=VALUE",
+        help="device stored rollback index for a location; repeat per location",
+    )
+    rollback_check.add_argument(
+        "--slot",
+        default=None,
+        help="slot the stored values belong to",
+    )
+    rollback_check.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
     return parser
 
 
@@ -297,6 +338,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "avb":
         return _run_avb(args)
+
+    if args.command == "rollback":
+        return _run_rollback(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -825,6 +869,114 @@ def _print_vbmeta(image: VbmetaImage) -> None:
         print("warning: unknown descriptors are reported but not interpreted")
     print("note: parsing only; signatures and chain-of-trust are not verified")
     print("read-only: no device access")
+
+
+def _run_rollback(args: argparse.Namespace) -> int:
+    if args.rollback_command != "check":
+        print("cairn rollback: choose 'check'", file=sys.stderr)
+        return EXIT_USAGE
+
+    chain_paths = _parse_chain_paths(args.chain, "cairn rollback check")
+    if chain_paths is None:
+        return EXIT_USAGE
+    stored = _parse_stored_indexes(args.stored, "cairn rollback check")
+    if stored is None:
+        return EXIT_USAGE
+
+    try:
+        image = load_vbmeta(args.image)
+        chain = _load_chain_images(chain_paths)
+        report = evaluate_avb_rollback(
+            image,
+            chain,
+            slot=args.slot,
+            stored=stored,
+            stored_source="device" if stored else "unknown",
+        )
+    except (AvbError, RollbackError) as exc:
+        print(f"cairn rollback check: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        _print_rollback_report(report, chain_supplied=bool(chain_paths))
+    return _exit_code_for_tri(report.state)
+
+
+def _parse_stored_indexes(specs: list[str], command: str) -> dict[int, int] | None:
+    values: dict[int, int] = {}
+    for spec in specs:
+        location_text, separator, value_text = spec.partition("=")
+        if not separator or not location_text or not value_text:
+            print(
+                f"{command}: malformed --stored {spec!r}; use LOCATION=VALUE",
+                file=sys.stderr,
+            )
+            return None
+        try:
+            location = int(location_text, 0)
+            value = int(value_text, 0)
+        except ValueError:
+            print(f"{command}: --stored {spec!r} must use integers", file=sys.stderr)
+            return None
+        if location < 0 or value < 0:
+            print(f"{command}: --stored {spec!r} must not be negative", file=sys.stderr)
+            return None
+        if value > MAX_ROLLBACK_INDEX:
+            print(
+                f"{command}: --stored {spec!r} exceeds the 64-bit rollback index limit",
+                file=sys.stderr,
+            )
+            return None
+        if location in values:
+            print(f"{command}: duplicate stored location {location}", file=sys.stderr)
+            return None
+        values[location] = value
+    return values
+
+
+def _print_rollback_report(report: RollbackReport, *, chain_supplied: bool) -> None:
+    print(f"findings: {len(report.findings)}")
+    for finding in report.findings:
+        location = "unknown" if finding.location is None else str(finding.location)
+        slot = "unknown" if finding.slot is None else finding.slot
+        print(
+            f"  {finding.counter}: {_tri_label(finding.state)} "
+            f"(location={location}, slot={slot}; {finding.reason})"
+        )
+    for warning in report.warnings:
+        print(f"  warning: {warning}")
+    print(f"verdict: {_tri_label(report.state)} - {_rollback_verdict(report.state)}")
+    if chain_supplied:
+        print("note: chain images are parsed, not signature-checked; use avb verify --chain")
+    print("note: an UNKNOWN verdict is a hard stop for SR-004, not a warning")
+    print("read-only: no device access")
+
+
+def _rollback_verdict(state: Tri) -> str:
+    if state is Tri.TRUE:
+        return "the package cannot lower any evaluated counter"
+    if state is Tri.FALSE:
+        return "the package definitely lowers a counter and this is not overridable"
+    return "the package may lower a counter and the evidence is incomplete"
+
+
+def _tri_label(state: Tri) -> str:
+    """Label a tri-state fact. Distinct from _state_label, which takes bool | None."""
+    if state is Tri.TRUE:
+        return "TRUE"
+    if state is Tri.FALSE:
+        return "FALSE"
+    return "UNKNOWN"
+
+
+def _exit_code_for_tri(state: Tri) -> int:
+    if state is Tri.TRUE:
+        return EXIT_OK
+    if state is Tri.FALSE:
+        return EXIT_FAILED
+    return EXIT_UNKNOWN
 
 
 def _resolve_fastboot(explicit: Path | None) -> Path | None:

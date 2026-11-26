@@ -318,3 +318,33 @@ key was compared against an expected key.
 package's VBMeta chain is coherent and can detect a substituted chained image.
 It still cannot establish that the package came from the vendor, so SR-003 remains
 UNKNOWN until a lock-state-aware or device-bound key check lands.
+
+---
+
+## ADR-021 - Rollback verdicts come from the documented inequality, and unknown is a hard stop
+
+**Context.** AOSP defines rollback protection as the device rejecting an image
+unless `rollback_index[n]` >= `stored_rollback_index[n]` for every location `n`,
+with the stored value held in tamper-evident storage and differing between A/B
+slots. The stored value lives on the device, and the catalog that might describe
+it does not exist yet.
+
+**Decision.** Implement the comparison once, in the Rollback Oracle, and derive
+every verdict from that inequality. The device's stored value is authoritative
+when it can be read, because the bootloader compares against the device. When it
+cannot be read, a catalog bound is the only acceptable substitute: an upper bound
+can prove the package is safe, a lower bound can prove the package lowers the
+counter, and neither means the package may lower it. An unknown stored value is
+UNKNOWN, which blocks, and it is never overridable. A verdict that evaluated no
+counter at all is UNKNOWN, never TRUE. The oracle carries provenance for every
+number it compares, and it ships no OEM counter policy, because the meaning and
+direction of OEM counters are device-specific and still unknown (KU-005, KU-009).
+
+**Consequences.** The oracle can be trusted to say "this package definitely
+lowers a counter" or "this package cannot lower the counters that were
+evaluated", and it refuses to guess in between. It follows nested chain
+descriptors with a depth limit and treats missing or malformed chained counters
+as unresolved. It parses chain images but does not verify their signatures; SR-003
+must pass separately. It cannot yet produce a TRUE verdict on a real device,
+because nothing reads the stored indexes; that gap is tracked as KU-030 and
+blocks SR-004 until it is closed.

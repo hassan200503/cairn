@@ -33,7 +33,8 @@ unknown, the rule result is `UNKNOWN`, and `UNKNOWN` blocks.
 | KU-026 | Contents of nested factory image zips, where real Pixel packages may keep `fastboot-info.txt` | Factory manifests can be incomplete | Real packages, streaming nested-zip reader | M1/T08 |
 | KU-027 | Source, signing, and rotation of the local vendor hash index | Index can be stale or tampered; a match is not authenticity | Vendor artifact hashes, signed catalog design | M2/M11 |
 | KU-028 | Per-device slot resolution and fallback sequencing for planner v0 | Non-executable or wrong plan | Hardware findings, fastboot differential tests | M3/M6 |
-| KU-029 | AVB trust establishment: per-location rollback semantics and a lock-state-aware key check. Embedded-key signature checks, footer-embedded VBMeta parsing, and chain-of-trust key matching exist, but no key is anchored to a device | A self-consistent image can be mistaken for a trusted one | `avbtool` chain corpus, bootloader key findings | M2/T09 |
+| KU-029 | AVB trust establishment: a lock-state-aware key check. Embedded-key signature checks, footer-embedded VBMeta parsing, chain-of-trust key matching, and the rollback comparator exist, but no key is anchored to a device | A self-consistent image can be mistaken for a trusted one | `avbtool` chain corpus, bootloader key findings | M2/T09 |
+| KU-030 | How to obtain a device's stored rollback indexes in the field, and the per-OEM counter policies (Xiaomi ARB values, Samsung SWREV and binary version, Qualcomm fuse counters) | The Rollback Oracle stays UNKNOWN on a real device, so SR-004 blocks every job | Vendor documentation, hardware findings, signed catalog | M4/T12 |
 
 ---
 

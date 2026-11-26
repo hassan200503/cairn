@@ -43,8 +43,8 @@ evidence snapshot hash, and the exact text shown in the report header.
 | --- | --- | --- | --- | --- |
 | SR-001 | Device identity matches package | Block | Block | UNKNOWN only, typed |
 | SR-002 | Package provenance | Block | Assist/override | UNKNOWN only |
-| SR-003 | AVB chain and VBMeta digest | Block | Block | UNKNOWN only, typed |
-| SR-004 | Rollback Oracle | Block | Block | UNKNOWN only, typed |
+| SR-003 | AVB chain and VBMeta digest | Block | Block | No |
+| SR-004 | Rollback Oracle | Block | Block | No |
 | SR-005 | Battery above threshold | Block | Block | No |
 | SR-006 | Link soak passed | Block | Block | No |
 | SR-007 | Host power stable | Block | Block | Typed |
@@ -97,8 +97,8 @@ published digest exists; lock state is considered.
 
 **FALSE:** verification failure on a locked device, or digest mismatch. Never
 overridable.
-**UNKNOWN:** verification could not run or lock state is unknown. Typed override only
-if the operator accepts the risk; the report says "unverified".
+**UNKNOWN:** verification could not run or lock state is unknown. Block; the report
+says "unverified". No override (ADR-020).
 **Source:** [AOSP-AVB], pinned `avbtool`.
 **Test:** hash descriptor, hashtree descriptor, chained `vbmeta_system`, per-location
 rollback index, locked key mismatch, unlocked key mismatch.
@@ -110,7 +110,7 @@ stored counter is known and the package is not lower.
 
 **FALSE:** package definitely lowers a counter. Never overridable.
 **UNKNOWN:** package may lower a counter and the stored index is unknown. Hard stop;
-catalog proof or typed override only.
+catalog proof only. No override (ADR-021).
 **Source:** [AOSP-AVB], OEM catalog quirk with HF ID.
 **Test:** known-safe, definitely-lower, unknown index, per-slot index difference,
 OEM counter unknown.

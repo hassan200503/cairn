@@ -64,6 +64,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   overrides log operator, reason, timestamp, evidence-snapshot hash, and exact report
   text without converting UNKNOWN to TRUE. Checks that assert a result without
   evidence references are downgraded to UNKNOWN.
+- Rollback Oracle v0 and `cairn rollback check`: applies the AOSP rollback
+  inequality to the counters a VBMeta package declares, including chained
+  partitions at the location named by the chain descriptor and nested chains up
+  to a depth limit, and returns a tri-state verdict with per-counter reasons.
+  Missing or malformed chained counters are unresolved, and an unreadable
+  image or chain is UNKNOWN rather than FALSE. The device's stored value is
+  authoritative when readable; a catalog bound can otherwise prove safety or
+  prove a downgrade. An unknown stored index is UNKNOWN and a hard stop, never
+  overridable. Chain images are parsed but not signature-checked; SR-003 is
+  separate. No OEM counter policy ships yet.
 - Evidence IDs and an evidence graph: boot-epoch stamping, post-reboot invalidation,
   inferred/stale refusal, verified JSON serialization, and property tests.
 - Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,

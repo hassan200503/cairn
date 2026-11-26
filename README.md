@@ -92,6 +92,7 @@ uv run cairn plan <package.zip> --index <index.json>
 uv run cairn avb info <vbmeta.img>
 uv run cairn avb digest <vbmeta.img> [--chain boot=<boot.img>]
 uv run cairn avb verify <vbmeta.img> [--key <key.avbpubkey>] [--chain boot=<boot.img>]
+uv run cairn rollback check <vbmeta.img> [--chain boot=<boot.img>] [--stored 3=3]
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy src
@@ -113,7 +114,14 @@ chained images, and verifies the RSA signature against the embedded key or an
 expected raw AVB public key. With `--chain`, it also follows the chain of trust:
 each chain descriptor's key is matched against the chained image's embedded key,
 the chained signature is checked, and nested chains are followed. Embedded-key
-validity is not a trust anchor, and rollback is not checked yet. None of these
+validity is not a trust anchor. `avb verify` does not check rollback. `cairn
+rollback check` answers whether a package can lower a rollback counter: it
+compares the package's rollback indexes with caller-supplied stored values. An
+unreadable image or chain is UNKNOWN, never FALSE, because a parse error is not
+evidence of a downgrade. The comparison uses
+the AOSP inequality, follows nested chain descriptors, and treats an unknown
+stored index as a hard stop, not a pass. It parses chained images but does not
+verify their signatures; use `cairn avb verify --chain` for that. None of these
 commands writes to a device.
 
 ## Repository map
@@ -128,6 +136,7 @@ src/cairn/
   package/       fastboot-info and factory/OTA package inspection
   plan/          read-only vendor-order planner and plan hash
   provenance/    offline hash index, AVB VBMeta parsing, and AVB chain verification (partial)
+  rollback/      rollback oracle: can this package lower a counter on this device?
   safety/        safety rule engine and override policy
   sim/           transcript schema and fault-injecting fastboot simulator
 docs/
