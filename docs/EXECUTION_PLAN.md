@@ -412,6 +412,21 @@ accepted. The first run exposed a real gap — no test pinned the
 now kills. Recorded run: **48/48 mutants killed** (33 rule mutants + 15
 approval mutants).
 
+### T21 - Super metadata parser (SR-011 metadata half)
+
+**Deliverable:** parse `super.img`/dynamic-partition metadata (geometry and LP
+metadata) so the planner can confirm the on-device partition layout before a
+write.
+**Accept:** parser output is differentially tested against an official oracle
+(`lpunpack`/`lpdump`/`lpmake`), per AGENTS.md rule 9; golden fixtures carry the
+generating command and SHA-256.
+**Depends on:** T17.
+**Status:** blocked (2026-11-27, KU-033). No Debian or Ubuntu package ships
+`lpmake`/`lpunpack`, so no CI-installable oracle exists; hand-rolling the parser
+without differential testing would violate rule 9. Resolution paths: build the
+AOSP dynamic-partition tools from pinned source in CI, or obtain real factory
+`super.img` fixtures verified with `lpdump`. Deferred until one lands.
+
 ---
 
 ## 5. Release gates
