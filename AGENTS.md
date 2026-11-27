@@ -96,8 +96,9 @@ Update the relevant doc in the same change:
   Rollback Oracle v0, vendor-specific device stored-index reader, safety engine,
   planner, package inspection, hash index, Host Doctor, sparse validation,
   simulator, preflight wizard, approval binding, the simulator-gated executor
-  with its write-ahead journal, and the recovery kit (encrypted device-bound
-  vault, SR-008/SR-009, M6 drill) have landed in slices. `cairn plan` safety-gates
+  with its write-ahead journal, the recovery kit (encrypted device-bound
+  vault, SR-008/SR-009, M6 drill), and the Virtual A/B merge-state gate
+  (SR-010, `cairn vab status`) have landed in slices. `cairn plan` safety-gates
   its structural dry run and refuses FALSE or UNKNOWN rules; `cairn execute` runs
   an approved plan end to end in the fastboot simulator only (ADR-027). The
   external crypto/safety review of the vault (KU-032) must land before any

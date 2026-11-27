@@ -26,7 +26,7 @@ from cairn.tools.manifest import ToolReport
 _RULE_ID_RE: Final = re.compile(r"^SR-\d{3}$")
 _APPROVAL_RULE_ID: Final = "SR-018"
 _NEVER_OVERRIDABLE: Final[frozenset[str]] = frozenset(
-    {"SR-003", "SR-004", "SR-012", "SR-013", "SR-018"}
+    {"SR-003", "SR-004", "SR-010", "SR-012", "SR-013", "SR-018"}
 )
 
 
@@ -117,6 +117,7 @@ class SafetyContext:
     approval: CheckState | None = None
     recovery_readiness: CheckState | None = None
     vault_backup: CheckState | None = None
+    merge_state: CheckState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,6 +278,11 @@ _SR_009 = RuleSpec(
     "critical partitions are backed up in a device-bound vault before wipe/relock",
     source_refs=("SAFETY_RULES SR-009", "SPEC_V2 3.7", "ADR-028"),
 )
+_SR_010 = RuleSpec(
+    "SR-010",
+    "no Virtual A/B merge is in progress for a normal flash",
+    source_refs=("SAFETY_RULES SR-010", "AOSP-FASTBOOTD", "KU-004"),
+)
 
 
 def _sr008_recovery(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
@@ -299,6 +305,23 @@ def _sr009_vault(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResu
             spec,
             Tri.UNKNOWN,
             "no vault backup was supplied for the wipe/relock gate",
+        )
+    return _result(
+        spec,
+        check.state,
+        check.detail,
+        evidence_ids=check.evidence_ids,
+        warnings=check.warnings,
+    )
+
+
+def _sr010_merge_state(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
+    check = ctx.merge_state
+    if check is None:
+        return _result(
+            spec,
+            Tri.UNKNOWN,
+            "snapshot-update-status was not read; the merge state is unknown",
         )
     return _result(
         spec,
@@ -629,6 +652,7 @@ DEFAULT_RULES: Final[tuple[tuple[RuleSpec, RuleEvaluator], ...]] = (
     (_SR_004, _sr004_rollback),
     (_SR_008, _sr008_recovery),
     (_SR_009, _sr009_vault),
+    (_SR_010, _sr010_merge_state),
     (_SR_012, _sr012_tool),
     (_SR_013, _sr013_lock_key),
     (_SR_018, _sr018_approval),

@@ -90,6 +90,7 @@ def _context(**overrides: object) -> SafetyContext:
         approval=CheckState(Tri.TRUE, "approval binding matches", ("ev-approval",)),
         recovery_readiness=CheckState(Tri.TRUE, "recovery assets verified", ("ev-recovery",)),
         vault_backup=CheckState(Tri.TRUE, "vault backup bound to device", ("ev-vault",)),
+        merge_state=CheckState(Tri.TRUE, "snapshot-update-status is none", ("ev-vab",)),
     )
     return replace(base, **overrides)
 
@@ -583,3 +584,49 @@ def test_identity_and_check_inputs_reject_empty_values() -> None:
         CheckState(Tri.TRUE, " ")
     with pytest.raises(SafetyError, match="evidence ids"):
         CheckState(Tri.TRUE, "ok", ("",))
+
+
+def test_sr010_blocks_when_merge_state_was_not_read() -> None:
+    context = _context(merge_state=None)
+    report = ENGINE.evaluate(context, now=NOW)
+    result = _rule(report, "SR-010")
+    assert result.state is Tri.UNKNOWN
+    assert "SR-010" in report.blocking
+    assert report.can_proceed is False
+
+
+def test_sr010_false_on_a_merge_in_progress() -> None:
+    context = _context(
+        merge_state=CheckState(
+            Tri.FALSE,
+            "snapshot-update-status is 'merging'; a flash during an unfinished "
+            "merge can leave the device unbootable",
+            ("ev-vab",),
+        )
+    )
+    report = ENGINE.evaluate(context, now=NOW)
+    assert report.verdict is Tri.FALSE
+    assert "SR-010" in report.blocking
+    assert report.can_proceed is False
+
+
+def test_sr010_true_passes_when_no_merge_is_pending() -> None:
+    result = _rule(ENGINE.evaluate(_context(), now=NOW), "SR-010")
+    assert result.state is Tri.TRUE
+    assert result.evidence_ids == ("ev-vab",)
+
+
+def test_sr010_unknown_is_never_overridable() -> None:
+    context = _context(merge_state=None)
+    request = OverrideRequest("SR-010", "alice", "skip the merge-state gate", NOW)
+    with pytest.raises(SafetyError, match="does not allow UNKNOWN overrides"):
+        ENGINE.evaluate(context, overrides=(request,), now=NOW)
+
+
+def test_sr010_false_is_never_overridable() -> None:
+    context = _context(
+        merge_state=CheckState(Tri.FALSE, "snapshot-update-status is 'merging'", ("ev-vab",))
+    )
+    request = OverrideRequest("SR-010", "alice", "flash anyway during a merge", NOW)
+    with pytest.raises(SafetyError, match="FALSE may never be overridden"):
+        ENGINE.evaluate(context, overrides=(request,), now=NOW)
