@@ -323,6 +323,25 @@ external crypto review of the vault and external safety review of the drill
 real scrubbed transcripts, hardware findings, and the Virtual A/B / dynamic
 partition state machines.
 
+### T16 - Virtual A/B merge-state gate
+
+**Deliverable:** read `snapshot-update-status`, classify it tri-state, enforce
+SR-010 in the safety engine, expose a read-only status command.
+**Accept:** every reported state (none, snapshotted, merging, unrecognized, FAIL,
+absent) maps to the SAFETY_RULES SR-010 verdicts; an unrecognized value or a FAIL
+blocks; no override; the read is read-only on a real device and replayable from a
+transcript.
+**Depends on:** T06, T11.
+**Status:** landed (2026-11-27). `cairn.vab` reads `snapshot-update-status` with
+one read-only `getvar` and classifies it: `none` is TRUE;
+`snapshotted`/`merging`/`merge_pending` are a never-overridable FALSE (a flash
+during an unfinished merge can leave the device unbootable); an unrecognized
+vendor value or a failed read is UNKNOWN and blocks (KU-004 stays open for
+vendor-specific states). The gate is safety-engine rule SR-010 (blocking, not
+overridable) and the CLI command `cairn vab status`. Remaining work: the
+super/dynamic-partition metadata state machine (SR-011) and explicit
+operator-approved merge/cancel flows modeled as plans; cairn never auto-cancels.
+
 ---
 
 ## 5. Release gates

@@ -11,8 +11,8 @@ cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
 **Last updated:** 2026-11-27, after the recovery kit and M6 drill slice (T15,
-ADR-028). The vault and drill are simulator-only and externally unreviewed
-(KU-032).
+ADR-028) and the Virtual A/B merge-state gate (T16, SR-010). The vault and drill
+are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -73,6 +73,7 @@ src/cairn/
   wizard/        resumable read-only preflight stages, strict session persistence, rendering
   executor/      simulator-gated plan executor, hash-chained write-ahead journal
   recovery/      encrypted device-bound vault, SR-008/SR-009 asset checks, M6 drill
+  vab/           Virtual A/B merge-state read and classification (SR-010)
 ```
 
 Design notes, in the order the reader should meet them:
@@ -125,6 +126,7 @@ Design notes, in the order the reader should meet them:
 | `cairn recovery verify VAULT [--passphrase-file F]` | verify a vault's MAC and recorded plaintext hashes | 0 verified / 1 tampered or wrong passphrase |
 | `cairn recovery restore VAULT --partition P --simulate TRANSCRIPT [--journal PATH] [--staging-dir DIR] --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F]` | restore a vault entry to its bound device identity in the simulator only; any other identity is REFUSED, never overridable (ADR-027, ADR-028) | 0 / 1 refused or failed / 2 usage / 3 simulator refused |
 | `cairn recovery drill --partition P --asset IMG --expected-sha256 H --vault VAULT --last-resort TEXT --simulate TRANSCRIPT --other-serial-sha256 H --other-fingerprint H --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F] [--json]` | run the M6 drill: verify, back up, restore same-device, refuse cross-device; the report is labelled SIMULATED and is not device evidence | 0 drill TRUE / 1 drill FAILED / 2 usage |
+| `cairn vab status [--fastboot PATH] [--serial S] [--simulate TRANSCRIPT]` | read-only `getvar snapshot-update-status` and SR-010 merge-state verdict: `none` passes, a mid-merge state is a never-overridable FALSE, anything unrecognized is UNKNOWN | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 
 Exit code constants: `EXIT_OK=0`, `EXIT_FAILED=1`, `EXIT_USAGE=2`, `EXIT_UNKNOWN=3`.
 Every command supports `--json` where structured output makes sense.
@@ -348,15 +350,16 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 543 passed, 2 skipped
+uv run pytest -q               # 556 passed, 2 skipped
 ```
 
 The latest CI run is `46003349752` for the T14 executor slice merged through
 pull request [#2](https://github.com/hassan200503/cairn/pull/2) (merge `4cf91bc`)
 and is green: lint, format, and types; the AOSP libsparse sparse oracle; and
-tests on Ubuntu and Windows under Python 3.12 and 3.14. The recovery-kit slice
-(T15) postdates that run; its commit's CI run must be green before merge. The
-543-test baseline above was confirmed locally on the T15 slice.
+tests on Ubuntu and Windows under Python 3.12 and 3.14. The recovery-kit (T15)
+and merge-state (T16) slices postdate that run; their commit's CI run must be
+green before merge. The
+556-test baseline above was confirmed locally on the T16 slice.
 
 The two local skips are environmental, not gaps in coverage:
 
@@ -468,6 +471,16 @@ push, confirm CI green.
    external crypto review of the vault and external safety review of the drill
    (KU-032), real scrubbed transcripts and hardware findings, and the Virtual
    A/B / dynamic-partition state machines.
+7. **T16 — Virtual A/B merge-state gate (landed).** `cairn.vab` reads
+   `snapshot-update-status` with one read-only getvar and classifies it
+   tri-state: `none` passes, `snapshotted`/`merging`/`merge_pending` are a
+   never-overridable FALSE, and unrecognized vendor values or a FAIL are
+   UNKNOWN that blocks (KU-004 stays open for vendor variants). The gate is
+   wired into the safety engine as rule SR-010 and exposed as the read-only
+   `cairn vab status` command (real device or transcript replay). Remaining
+   work: the super/dynamic-partition metadata state machine (SR-011), and
+   explicit operator-approved merge/cancel flows modeled as plans — cairn
+   never auto-cancels.
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session

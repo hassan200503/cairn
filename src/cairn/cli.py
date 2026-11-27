@@ -114,6 +114,7 @@ from cairn.safety.engine import SafetyContext, SafetyEngine
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
+from cairn.vab import MergeStateRead, read_merge_state
 from cairn.wizard.render import render_session, session_exit_code
 from cairn.wizard.runner import run_wizard
 from cairn.wizard.session import (
@@ -973,6 +974,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="emit machine-readable output",
     )
 
+    vab = subparsers.add_parser(
+        "vab",
+        help="Virtual A/B state: read-only merge-state checks (SR-010)",
+    )
+    vab_sub = vab.add_subparsers(dest="vab_command", metavar="subcommand")
+    vab_status = vab_sub.add_parser(
+        "status",
+        help="read snapshot-update-status and evaluate the SR-010 merge-state gate (read-only)",
+    )
+    vab_status.add_argument(
+        "--fastboot",
+        type=Path,
+        help="path to the official fastboot executable (default: CAIRN_FASTBOOT or PATH)",
+    )
+    vab_status.add_argument(
+        "--serial",
+        help="target device serial; omit to let fastboot choose",
+    )
+    vab_status.add_argument(
+        "--simulate",
+        type=Path,
+        metavar="TRANSCRIPT",
+        help="replay a recorded transcript instead of touching hardware",
+    )
+    vab_status.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
     return parser
 
 
@@ -1025,6 +1056,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "rollback":
         return _run_rollback(args)
+
+    if args.command == "vab":
+        return _run_vab(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -2921,6 +2955,57 @@ def _print_rollback_read(read: DeviceRollbackRead, *, simulated: bool) -> None:
         print(f"unresolved: {item}")
     print(f"detail: {read.detail}")
     print("note: a device read is a claim, not AVB verification")
+    print("read-only: no device writes")
+
+
+def _run_vab(args: argparse.Namespace) -> int:
+    command = "cairn vab"
+    subcommand = getattr(args, "vab_command", None)
+    if subcommand == "status":
+        return _vab_status(args, command)
+    print(f"{command}: choose status", file=sys.stderr)
+    return EXIT_USAGE
+
+
+def _vab_status(args: argparse.Namespace, command: str) -> int:
+    setup = _prepare_fastboot(args, command=f"{command} status")
+    if setup is None:
+        return EXIT_USAGE
+    client, tool, simulated = setup
+    read = read_merge_state(client, serial=args.serial, simulated=simulated)
+
+    if args.json:
+        payload: dict[str, object] = {
+            "tool": tool,
+            **read.to_dict(),
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_vab_status(read)
+    if read.state is Tri.TRUE:
+        return EXIT_OK
+    if read.state is Tri.FALSE:
+        return EXIT_FAILED
+    return EXIT_UNKNOWN
+
+
+def _print_vab_status(read: MergeStateRead) -> None:
+    suffix = " (SIMULATED)" if read.simulated else ""
+    print(f"cairn vab status: read-only getvar snapshot-update-status{suffix}")
+    if read.value is not None:
+        print(f"snapshot-update-status: {read.value}")
+    print(f"merge-state gate: {read.state.name}")
+    if read.state is Tri.FALSE:
+        print(
+            "a normal flash plan is blocked: FALSE rules refuse and this is "
+            "never overridable; use an explicit operator-approved merge or "
+            "cancel flow instead"
+        )
+    elif read.state is Tri.UNKNOWN:
+        print("a normal flash plan is blocked: UNKNOWN merge state")
+    for warning in read.warnings:
+        print(f"warning: {warning}")
+    print(f"detail: {read.detail}")
     print("read-only: no device writes")
 
 
