@@ -12,8 +12,9 @@ does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
 **Last updated:** 2026-11-27, after the recovery kit and M6 drill slice (T15,
 ADR-028), the Virtual A/B merge-state gate (T16, SR-010), the
-dynamic-partition mode gate (T17, SR-011), and the modeled snapshot
-cancel/merge flows (T18). The vault and drill
+dynamic-partition mode gate (T17, SR-011), the modeled snapshot
+cancel/merge flows (T18), and the safety-rule mutation harness (T19,
+33/33 mutants killed). The vault and drill
 are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
@@ -507,6 +508,15 @@ push, confirm CI green.
    PlanAction for the modeled argv. Cairn never auto-cancels; no real
    device can be targeted. Remaining M6 work: super metadata parsing
    oracles, and the external reviews (KU-032).
+10. **T19 — Safety-rule mutation harness (landed).** `tools/mutation_check.py`
+    wraps each registered rule's evaluator with three mutants (`always-true`,
+    `unknown-true`, `false-true`) at its `DEFAULT_RULES` registration site and
+    runs the safety-relevant test files in a subprocess per mutant. The
+    recorded run killed **33/33 mutants** across all 11 registered rules,
+    satisfying the AGENTS.md "three suite-killed mutants per safety rule"
+    requirement for the current rule set. Run it after any change to rule
+    logic (`python tools/mutation_check.py`, ~3 minutes, on demand — not in
+    the default CI loop). Remaining work: approval-binding mutation tests.
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session

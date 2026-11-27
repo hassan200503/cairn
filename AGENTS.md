@@ -107,6 +107,9 @@ Update the relevant doc in the same change:
   external crypto/safety review of the vault (KU-032) must land before any
   real-device write transport exists.
 
+- Testing duty: run `python tools/mutation_check.py` after any change to
+  safety-rule logic; every rule must keep three suite-killed mutants.
+
 ## Definition of done
 
 Implementation + happy/failure/unsafe tests + type/lint/format + source citation +
