@@ -10,11 +10,10 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the recovery kit and M6 drill slice (T15,
-ADR-028), the Virtual A/B merge-state gate (T16, SR-010), the
-dynamic-partition mode gate (T17, SR-011), the modeled snapshot
-cancel/merge flows (T18), the safety-rule mutation harness (T19), and the
-approval-binding mutation tests (T20; 48/48 mutants killed). The vault and
+**Last updated:** 2026-11-27, after the approval-binding mutation tests (T20;
+48/48 mutants killed) and the KU-033 record of the super-metadata oracle
+blocker (T21 is blocked: no `lpmake`/`lpunpack` package exists to differentially
+test against). The vault and
 drill are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
@@ -425,6 +424,9 @@ These are the reasons the remaining work cannot simply be "finished":
   drill have only this project's own review and tests; external sign-off is an
   explicit T15 acceptance condition (KU-032), and no real-device write may
   depend on the vault until it lands.
+- **No super-metadata oracle.** No Debian/Ubuntu package ships `lpmake`/
+  `lpunpack` (KU-033), so the SR-011 metadata half cannot be differentially
+  tested against an official tool; the parser is deferred, not hand-rolled.
 - **No Pixel verifier oracle.** `pixel_factory_image_verify.py` has not been
   run against our output.
 - **EDL, MediaTek, and Samsung backends** are research-only; no hardware, no
@@ -526,6 +528,18 @@ push, confirm CI green.
     pinned the `archive_sha256` comparison — now killed by
     `test_verify_is_false_when_the_archive_hash_changed`. Recorded run:
     **48/48 mutants killed** (33 rule + 15 approval).
+12. **T21 — Super metadata parser (blocked, KU-033).** The SR-011 metadata
+    half (parsing `super.img` geometry and LP metadata to confirm layout
+    before a write) cannot proceed: no Debian or Ubuntu package ships
+    `lpmake`/`lpunpack`, so there is no CI-installable official oracle, and
+    AGENTS.md rule 9 forbids a hand-rolled parser without differential
+    testing. The blocker and its resolution paths (build AOSP
+    dynamic-partition tools from pinned source, or obtain real factory
+    `super.img` fixtures verified with `lpdump`) are recorded in KU-033 and
+    the T21 entry in `EXECUTION_PLAN.md`. The executor's TOCTOU re-hash guard
+    was re-checked and is covered by
+    `test_execute_refuses_image_that_changed_after_approval` and the
+    not-covered-by-binding test.
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session
