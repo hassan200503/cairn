@@ -114,7 +114,16 @@ from cairn.safety.engine import SafetyContext, SafetyEngine
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
-from cairn.vab import DynPartRead, MergeStateRead, read_dynpart, read_merge_state
+from cairn.vab import (
+    DynPartRead,
+    FlowRefused,
+    MergeStateRead,
+    expected_acknowledgment,
+    read_dynpart,
+    read_merge_state,
+    run_snapshot_flow,
+)
+from cairn.vab.flows import SnapshotFlowInputs
 from cairn.wizard.render import render_session, session_exit_code
 from cairn.wizard.runner import run_wizard
 from cairn.wizard.session import (
@@ -1032,6 +1041,64 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="emit machine-readable output",
+    )
+
+    def _add_snapshot_flow_args(parser: argparse.ArgumentParser, action: str) -> None:
+        parser.add_argument(
+            "--simulate",
+            type=Path,
+            required=True,
+            metavar="TRANSCRIPT",
+            help="transcript to replay; the only permitted target (ADR-027)",
+        )
+        parser.add_argument(
+            "--serial",
+            help="target device serial; omit to let fastboot choose",
+        )
+        parser.add_argument(
+            "--acknowledgment",
+            required=True,
+            help=(
+                "type the exact risk sentence printed by 'cairn vab "
+                f"{action} --help-text' to confirm it has been read"
+            ),
+        )
+        parser.add_argument(
+            "--recovery-asset",
+            type=Path,
+            required=True,
+            help="recovery image that must verify before the flow runs (SR-008)",
+        )
+        parser.add_argument(
+            "--recovery-sha256",
+            required=True,
+            metavar="HASH",
+            help="expected sha256 of the recovery asset",
+        )
+        parser.add_argument(
+            "--last-resort",
+            required=True,
+            help="the stated last-resort recovery path (e.g. EDL entry point)",
+        )
+        parser.add_argument(
+            "--json",
+            action="store_true",
+            help="emit machine-readable output",
+        )
+
+    _add_snapshot_flow_args(
+        vab_sub.add_parser(
+            "cancel",
+            help="cancel an in-progress Virtual A/B snapshot (simulator only, typed approval)",
+        ),
+        "cancel",
+    )
+    _add_snapshot_flow_args(
+        vab_sub.add_parser(
+            "merge",
+            help="merge an in-progress Virtual A/B update (simulator only, typed approval)",
+        ),
+        "merge",
     )
 
     return parser
@@ -2995,8 +3062,48 @@ def _run_vab(args: argparse.Namespace) -> int:
         return _vab_status(args, command)
     if subcommand == "dynpart":
         return _vab_dynpart(args, command)
-    print(f"{command}: choose status or dynpart", file=sys.stderr)
+    if subcommand in ("cancel", "merge"):
+        return _vab_snapshot_flow(args, command, subcommand)
+    print(f"{command}: choose status, dynpart, cancel, or merge", file=sys.stderr)
     return EXIT_USAGE
+
+
+def _vab_snapshot_flow(args: argparse.Namespace, command: str, action: str) -> int:
+    inputs = SnapshotFlowInputs(
+        action=action,
+        transcript=args.simulate,
+        acknowledgment=args.acknowledgment,
+        recovery_asset=args.recovery_asset,
+        recovery_sha256=args.recovery_sha256,
+        last_resort=args.last_resort,
+    )
+
+    def _flow_client() -> FastbootClient:
+        setup = _prepare_fastboot(args, command=f"{command} {action}")
+        if setup is None:
+            raise FlowRefused("the simulator could not be prepared")
+        return setup[0]
+
+    try:
+        report = run_snapshot_flow(_flow_client, inputs, serial=args.serial)
+    except FlowRefused as exc:
+        print(f"{command} {action}: REFUSED: {exc}", file=sys.stderr)
+        print(f"required acknowledgment: {expected_acknowledgment(action)}", file=sys.stderr)
+        return EXIT_FAILED
+    except (ToolError, OSError, ExecutorRefused) as exc:
+        print(f"{command} {action}: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(f"snapshot flow: {report.action} (SIMULATED, not device evidence)")
+        print(f"merge state seen: {report.merge_state_seen}")
+        print(f"result: {'OK' if report.ok else 'FAILED'} (simulator exit {report.exit_code})")
+        print(
+            "cairn never auto-cancels; this flow ran only because the typed "
+            "acknowledgment matched exactly and recovery assets verified"
+        )
+    return EXIT_OK if report.ok else EXIT_FAILED
 
 
 def _vab_status(args: argparse.Namespace, command: str) -> int:

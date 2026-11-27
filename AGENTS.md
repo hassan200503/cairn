@@ -98,8 +98,10 @@ Update the relevant doc in the same change:
   simulator, preflight wizard, approval binding, the simulator-gated executor
   with its write-ahead journal, the recovery kit (encrypted device-bound
   vault, SR-008/SR-009, M6 drill), the Virtual A/B merge-state gate
-  (SR-010, `cairn vab status`), and the dynamic-partition mode gate
-  (SR-011, `cairn vab dynpart`) have landed in slices. `cairn plan` safety-gates
+  (SR-010, `cairn vab status`), the dynamic-partition mode gate
+  (SR-011, `cairn vab dynpart`), and the modeled snapshot cancel/merge
+  flows (`cairn vab cancel|merge`, simulator-only with typed approval)
+  have landed in slices. `cairn plan` safety-gates
   its structural dry run and refuses FALSE or UNKNOWN rules; `cairn execute` runs
   an approved plan end to end in the fastboot simulator only (ADR-027). The
   external crypto/safety review of the vault (KU-032) must land before any

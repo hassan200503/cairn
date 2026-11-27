@@ -46,6 +46,9 @@ class PlanAction(StrEnum):
     ERASE = "erase"
     REBOOT = "reboot"
     UPDATE_SUPER = "update-super"
+    # Only the modeled snapshot flows (cairn.vab) build this action; the
+    # planner itself never emits it.
+    SNAPSHOT_UPDATE = "snapshot-update"
 
 
 class SlotPolicy(StrEnum):

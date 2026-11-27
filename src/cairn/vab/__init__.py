@@ -1,10 +1,17 @@
-"""Virtual A/B state machines: merge-state and dynamic-partition gates."""
+"""Virtual A/B state machines: merge-state, dynamic-partition, snapshot flows."""
 
 from cairn.vab.dynpart import (
     DynPartError,
     DynPartRead,
     classify_dynpart_mode,
     read_dynpart,
+)
+from cairn.vab.flows import (
+    FlowRefused,
+    FlowReport,
+    SnapshotFlowInputs,
+    expected_acknowledgment,
+    run_snapshot_flow,
 )
 from cairn.vab.merge_state import (
     MergeStateError,
@@ -16,10 +23,15 @@ from cairn.vab.merge_state import (
 __all__ = [
     "DynPartError",
     "DynPartRead",
+    "FlowRefused",
+    "FlowReport",
     "MergeStateError",
     "MergeStateRead",
+    "SnapshotFlowInputs",
     "classify_dynpart_mode",
     "classify_snapshot_status",
+    "expected_acknowledgment",
     "read_dynpart",
     "read_merge_state",
+    "run_snapshot_flow",
 ]
