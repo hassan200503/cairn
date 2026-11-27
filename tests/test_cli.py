@@ -347,6 +347,7 @@ def test_plan_json_is_machine_readable(tmp_path, capsys) -> None:
         "SR-008",
         "SR-009",
         "SR-010",
+        "SR-011",
     }
     assert payload["safety"]["snapshot_excludes"] == ["SR-018"]
     assert len(payload["plan_sha256"]) == 64

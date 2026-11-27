@@ -342,6 +342,23 @@ overridable) and the CLI command `cairn vab status`. Remaining work: the
 super/dynamic-partition metadata state machine (SR-011) and explicit
 operator-approved merge/cancel flows modeled as plans; cairn never auto-cancels.
 
+### T17 - Dynamic-partition mode gate
+
+**Deliverable:** read the dynamic-partition facts, evaluate the flash mode
+against the job's requirement, enforce SR-011 in the safety engine, expose a
+read-only mode check.
+**Accept:** a fastbootd job from the bootloader is FALSE and never overridable;
+unreadable facts are UNKNOWN and block; a bootloader job on a dynamic device is
+not a silent pass; the read is read-only and transcript-replayable.
+**Depends on:** T06, T11, T16.
+**Status:** landed (2026-11-27). `cairn.vab.dynpart` reads `is-userspace`,
+`dynamic-partition`, and `super-partition-name` with three read-only getvars and
+evaluates the job's required mode. The gate is safety-engine rule SR-011
+(blocking; UNKNOWN is typed-overridable per SAFETY_RULES, FALSE is never
+overridable) and the CLI command `cairn vab dynpart --mode fastbootd|bootloader`.
+Remaining work: real super metadata parsing behind lpunpack/lpmake oracles and
+modeled operator-approved merge/cancel flows.
+
 ---
 
 ## 5. Release gates

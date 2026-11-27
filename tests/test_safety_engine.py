@@ -91,6 +91,7 @@ def _context(**overrides: object) -> SafetyContext:
         recovery_readiness=CheckState(Tri.TRUE, "recovery assets verified", ("ev-recovery",)),
         vault_backup=CheckState(Tri.TRUE, "vault backup bound to device", ("ev-vault",)),
         merge_state=CheckState(Tri.TRUE, "snapshot-update-status is none", ("ev-vab",)),
+        dynpart_mode=CheckState(Tri.TRUE, "fastbootd mode matches a dynamic device", ("ev-dyn",)),
     )
     return replace(base, **overrides)
 
@@ -628,5 +629,60 @@ def test_sr010_false_is_never_overridable() -> None:
         merge_state=CheckState(Tri.FALSE, "snapshot-update-status is 'merging'", ("ev-vab",))
     )
     request = OverrideRequest("SR-010", "alice", "flash anyway during a merge", NOW)
+    with pytest.raises(SafetyError, match="FALSE may never be overridden"):
+        ENGINE.evaluate(context, overrides=(request,), now=NOW)
+
+
+def test_sr011_blocks_when_dynpart_state_was_not_read() -> None:
+    context = _context(dynpart_mode=None)
+    report = ENGINE.evaluate(context, now=NOW)
+    result = _rule(report, "SR-011")
+    assert result.state is Tri.UNKNOWN
+    assert "SR-011" in report.blocking
+    assert report.can_proceed is False
+
+
+def test_sr011_false_when_dynamic_job_runs_in_bootloader() -> None:
+    context = _context(
+        dynpart_mode=CheckState(
+            Tri.FALSE,
+            "bootloader mode cannot flash dynamic partitions; reboot to fastbootd first",
+            ("ev-dyn",),
+        )
+    )
+    report = ENGINE.evaluate(context, now=NOW)
+    assert report.verdict is Tri.FALSE
+    assert "SR-011" in report.blocking
+
+
+def test_sr011_true_passes_when_the_mode_matches() -> None:
+    result = _rule(ENGINE.evaluate(_context(), now=NOW), "SR-011")
+    assert result.state is Tri.TRUE
+    assert result.evidence_ids == ("ev-dyn",)
+
+
+def test_sr011_unknown_is_typed_overridable() -> None:
+    context = _context(dynpart_mode=None)
+    base = ENGINE.evaluate(context, now=NOW)
+    assert base.can_proceed is False
+
+    request = OverrideRequest(
+        "SR-011",
+        "alice",
+        "physical partitions only; super metadata confirmed by catalog",
+        NOW,
+    )
+    report = ENGINE.evaluate(context, overrides=(request,), now=NOW)
+    assert report.verdict is Tri.UNKNOWN
+    assert report.can_proceed is True
+    assert "SR-011" not in report.blocking
+    assert "SR-011" in {record.rule_id for record in report.overrides}
+
+
+def test_sr011_false_is_never_overridable() -> None:
+    context = _context(
+        dynpart_mode=CheckState(Tri.FALSE, "bootloader mode cannot flash dynamic partitions", ())
+    )
+    request = OverrideRequest("SR-011", "alice", "flash dynamic partition from bootloader", NOW)
     with pytest.raises(SafetyError, match="FALSE may never be overridden"):
         ENGINE.evaluate(context, overrides=(request,), now=NOW)

@@ -118,6 +118,7 @@ class SafetyContext:
     recovery_readiness: CheckState | None = None
     vault_backup: CheckState | None = None
     merge_state: CheckState | None = None
+    dynpart_mode: CheckState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +284,12 @@ _SR_010 = RuleSpec(
     "no Virtual A/B merge is in progress for a normal flash",
     source_refs=("SAFETY_RULES SR-010", "AOSP-FASTBOOTD", "KU-004"),
 )
+_SR_011 = RuleSpec(
+    "SR-011",
+    "dynamic-partition flash mode matches the device's dynamic state",
+    unknown_overridable=True,
+    source_refs=("SAFETY_RULES SR-011", "AOSP-DYNPART", "AOSP-FASTBOOTD"),
+)
 
 
 def _sr008_recovery(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
@@ -322,6 +329,23 @@ def _sr010_merge_state(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> Ru
             spec,
             Tri.UNKNOWN,
             "snapshot-update-status was not read; the merge state is unknown",
+        )
+    return _result(
+        spec,
+        check.state,
+        check.detail,
+        evidence_ids=check.evidence_ids,
+        warnings=check.warnings,
+    )
+
+
+def _sr011_dynpart(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
+    check = ctx.dynpart_mode
+    if check is None:
+        return _result(
+            spec,
+            Tri.UNKNOWN,
+            "dynamic-partition state was not read; the correct flash mode is unknown",
         )
     return _result(
         spec,
@@ -653,6 +677,7 @@ DEFAULT_RULES: Final[tuple[tuple[RuleSpec, RuleEvaluator], ...]] = (
     (_SR_008, _sr008_recovery),
     (_SR_009, _sr009_vault),
     (_SR_010, _sr010_merge_state),
+    (_SR_011, _sr011_dynpart),
     (_SR_012, _sr012_tool),
     (_SR_013, _sr013_lock_key),
     (_SR_018, _sr018_approval),

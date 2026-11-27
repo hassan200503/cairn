@@ -114,7 +114,7 @@ from cairn.safety.engine import SafetyContext, SafetyEngine
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
-from cairn.vab import MergeStateRead, read_merge_state
+from cairn.vab import DynPartRead, MergeStateRead, read_dynpart, read_merge_state
 from cairn.wizard.render import render_session, session_exit_code
 from cairn.wizard.runner import run_wizard
 from cairn.wizard.session import (
@@ -999,6 +999,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="replay a recorded transcript instead of touching hardware",
     )
     vab_status.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+    vab_dynpart = vab_sub.add_parser(
+        "dynpart",
+        help="check the dynamic-partition flash mode against the device (read-only, SR-011)",
+    )
+    vab_dynpart.add_argument(
+        "--mode",
+        required=True,
+        choices=("fastbootd", "bootloader"),
+        help="the mode the job requires: fastbootd for update-super or logical partitions",
+    )
+    vab_dynpart.add_argument(
+        "--fastboot",
+        type=Path,
+        help="path to the official fastboot executable (default: CAIRN_FASTBOOT or PATH)",
+    )
+    vab_dynpart.add_argument(
+        "--serial",
+        help="target device serial; omit to let fastboot choose",
+    )
+    vab_dynpart.add_argument(
+        "--simulate",
+        type=Path,
+        metavar="TRANSCRIPT",
+        help="replay a recorded transcript instead of touching hardware",
+    )
+    vab_dynpart.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -2963,7 +2993,9 @@ def _run_vab(args: argparse.Namespace) -> int:
     subcommand = getattr(args, "vab_command", None)
     if subcommand == "status":
         return _vab_status(args, command)
-    print(f"{command}: choose status", file=sys.stderr)
+    if subcommand == "dynpart":
+        return _vab_dynpart(args, command)
+    print(f"{command}: choose status or dynpart", file=sys.stderr)
     return EXIT_USAGE
 
 
@@ -3003,6 +3035,56 @@ def _print_vab_status(read: MergeStateRead) -> None:
         )
     elif read.state is Tri.UNKNOWN:
         print("a normal flash plan is blocked: UNKNOWN merge state")
+    for warning in read.warnings:
+        print(f"warning: {warning}")
+    print(f"detail: {read.detail}")
+    print("read-only: no device writes")
+
+
+def _vab_dynpart(args: argparse.Namespace, command: str) -> int:
+    setup = _prepare_fastboot(args, command=f"{command} dynpart")
+    if setup is None:
+        return EXIT_USAGE
+    client, tool, simulated = setup
+    read = read_dynpart(
+        client,
+        job_mode=args.mode,
+        serial=args.serial,
+        simulated=simulated,
+    )
+
+    if args.json:
+        payload: dict[str, object] = {
+            "tool": tool,
+            "job_mode": args.mode,
+            **read.to_dict(),
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_vab_dynpart(read, job_mode=args.mode)
+    if read.state is Tri.TRUE:
+        return EXIT_OK
+    if read.state is Tri.FALSE:
+        return EXIT_FAILED
+    return EXIT_UNKNOWN
+
+
+def _print_vab_dynpart(read: DynPartRead, *, job_mode: str) -> None:
+    suffix = " (SIMULATED)" if read.simulated else ""
+    print(f"cairn vab dynpart: read-only dynamic-partition mode check{suffix}")
+    print(f"job mode: {job_mode}")
+    print(f"is-userspace: {read.is_userspace}")
+    print(f"dynamic-partition: {read.dynamic_partition}")
+    if read.super_partition_name is not None:
+        print(f"super partition: {read.super_partition_name}")
+    print(f"mode gate: {read.state.name}")
+    if read.state is Tri.FALSE:
+        print(
+            "the job's required mode does not match the device: FALSE rules "
+            "refuse and this check must pass before any dynamic-partition write"
+        )
+    elif read.state is Tri.UNKNOWN:
+        print("the correct flash mode is unknown; UNKNOWN blocks")
     for warning in read.warnings:
         print(f"warning: {warning}")
     print(f"detail: {read.detail}")
