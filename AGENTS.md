@@ -93,10 +93,13 @@ Update the relevant doc in the same change:
   drill still come first.
 - The AVB parser, signature and chain checks, contextual expected-key check,
   Rollback Oracle v0, vendor-specific device stored-index reader, safety engine,
-  planner, package inspection, hash index, Host Doctor, sparse validation, and
-  simulator have landed in slices. `cairn plan` now safety-gates its structural dry
-  run and refuses FALSE or UNKNOWN rules. A device-bound lock/key anchor and the
-  catalog-bound preflight inputs remain unknown; approval binding (T13) comes next.
+  planner, package inspection, hash index, Host Doctor, sparse validation,
+  simulator, preflight wizard, approval binding, and the simulator-gated executor
+  with its write-ahead journal have landed in slices. `cairn plan` safety-gates its
+  structural dry run and refuses FALSE or UNKNOWN rules; `cairn execute` runs an
+  approved plan end to end in the fastboot simulator only (ADR-027). A device-bound
+  lock/key anchor and the catalog-bound preflight inputs remain unknown; T15 (the
+  Recovery Kit and M6 gate) comes before any real-device write transport.
 
 ## Definition of done
 

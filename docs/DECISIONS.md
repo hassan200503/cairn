@@ -500,3 +500,39 @@ remain blocked.
 trust rung, no catalog authority, and no device write path. Until the existing
 catalog-bound preflight and device-bound lock/key anchor exist, a real session may
 properly end `BLOCKED`; this is deliberate.
+
+---
+
+## ADR-027 - The executor is simulator-gated and journal-first
+
+**Context.** T14 asks for a write-ahead journal, idempotency classes, reconcile, and
+a crash harness. This is the first slice with write verbs (flash, erase, reboot,
+update-super), and the M6 gate plus recovery drill (T15) do not exist yet. The
+product promise requires that an executor which cannot yet prove recovery must not
+be able to touch hardware at all.
+
+**Decision.** The executor lives in `cairn.executor` behind three fail-closed gates:
+a plan-hash and executability check, a safety gate (a FALSE verdict refuses always;
+UNKNOWN is executable only because the only transport is the simulator, and the run
+is labelled `SIMULATED` throughout), and a verified approval token over the exact
+plan, package, entry hashes, and device binding (SR-018). The only transport that
+can issue a write verb is `SimulatedFastbootTransport`, constructed exclusively from
+a transcript replay; a real fastboot binary raises `EXECUTOR_REFUSED`. Every flashed
+image is re-extracted and re-hashed against the approval bundle before staging
+(TOCTOU guard). Execution is journaled in an append-only, hash-chained JSONL
+write-ahead log with fsync per record; a torn tail after a crash is truncated on
+resume, mid-chain corruption refuses the journal.
+
+Idempotency classes: FLASH, ERASE, and UPDATE-SUPER are idempotent and may be
+re-run on resume; REBOOT is non-idempotent because it invalidates pre-reboot
+evidence (the evidence graph invalidates earlier boot epochs), so resume after an
+interrupted reboot aborts with the plan's stop-and-reprobe fallback and requires a
+fresh preflight. A previously failed step is never retried automatically. The crash
+harness in `tests/test_executor.py` kills execution after every journal record and
+proves each resume reaches exactly the uninterrupted final device state.
+
+**Consequences.** `cairn execute` runs approved plans end to end today, but only in
+the simulator, and every output says so. The real-device transport is a future slice
+that must require a TRUE (or overridable-UNKNOWN-allowed) `can_proceed` safety gate,
+the T15 recovery kit, and the M6 drill before it can be constructed. The journal is
+tamper-evident, not tamper-proof, matching ADR-014.
