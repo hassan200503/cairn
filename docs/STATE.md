@@ -11,8 +11,9 @@ cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
 **Last updated:** 2026-11-27, after the recovery kit and M6 drill slice (T15,
-ADR-028), the Virtual A/B merge-state gate (T16, SR-010), and the
-dynamic-partition mode gate (T17, SR-011). The vault and drill
+ADR-028), the Virtual A/B merge-state gate (T16, SR-010), the
+dynamic-partition mode gate (T17, SR-011), and the modeled snapshot
+cancel/merge flows (T18). The vault and drill
 are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
@@ -74,7 +75,7 @@ src/cairn/
   wizard/        resumable read-only preflight stages, strict session persistence, rendering
   executor/      simulator-gated plan executor, hash-chained write-ahead journal
   recovery/      encrypted device-bound vault, SR-008/SR-009 asset checks, M6 drill
-  vab/           Virtual A/B merge-state (SR-010) and dynamic-partition mode (SR-011) gates
+  vab/           Virtual A/B merge-state (SR-010), dynamic-partition mode (SR-011), and snapshot flows
 ```
 
 Design notes, in the order the reader should meet them:
@@ -129,6 +130,8 @@ Design notes, in the order the reader should meet them:
 | `cairn recovery drill --partition P --asset IMG --expected-sha256 H --vault VAULT --last-resort TEXT --simulate TRANSCRIPT --other-serial-sha256 H --other-fingerprint H --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F] [--json]` | run the M6 drill: verify, back up, restore same-device, refuse cross-device; the report is labelled SIMULATED and is not device evidence | 0 drill TRUE / 1 drill FAILED / 2 usage |
 | `cairn vab status [--fastboot PATH] [--serial S] [--simulate TRANSCRIPT]` | read-only `getvar snapshot-update-status` and SR-010 merge-state verdict: `none` passes, a mid-merge state is a never-overridable FALSE, anything unrecognized is UNKNOWN | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn vab dynpart --mode fastbootd\|bootloader [--fastboot PATH] [--serial S] [--simulate TRANSCRIPT]` | read-only SR-011 mode check: three getvars (`is-userspace`, `dynamic-partition`, `super-partition-name`) are compared with the job's required mode; a fastbootd job from the bootloader is FALSE, unreadable facts are UNKNOWN | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
+| `cairn vab cancel --simulate TRANSCRIPT --acknowledgment TEXT --recovery-asset IMG --recovery-sha256 H --last-resort TEXT [--json]` | cancel an in-progress snapshot: exact typed acknowledgment, verified recovery assets, stated last-resort path, and a matching merge state are all required; simulator only (ADR-027) | 0 / 1 refused or failed / 2 usage / 3 simulator error |
+| `cairn vab merge --simulate TRANSCRIPT --acknowledgment TEXT --recovery-asset IMG --recovery-sha256 H --last-resort TEXT [--json]` | merge an in-progress snapshot: same gates as cancel, but the merge state must be `merging`; simulator only (ADR-027) | 0 / 1 refused or failed / 2 usage / 3 simulator error |
 
 Exit code constants: `EXIT_OK=0`, `EXIT_FAILED=1`, `EXIT_USAGE=2`, `EXIT_UNKNOWN=3`.
 Every command supports `--json` where structured output makes sense.
@@ -352,16 +355,16 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 572 passed, 2 skipped
+uv run pytest -q               # 583 passed, 2 skipped
 ```
 
 The latest CI run is `46003349752` for the T14 executor slice merged through
 pull request [#2](https://github.com/hassan200503/cairn/pull/2) (merge `4cf91bc`)
 and is green: lint, format, and types; the AOSP libsparse sparse oracle; and
 tests on Ubuntu and Windows under Python 3.12 and 3.14. The recovery-kit (T15),
-merge-state (T16), and dynamic-partition (T17) slices postdate that run; their
-commits' CI runs must be green before merge. The
-572-test baseline above was confirmed locally on the T17 slice.
+merge-state (T16), dynamic-partition (T17), and snapshot-flow (T18) slices
+postdate that run; their commits' CI runs must be green before merge. The
+583-test baseline above was confirmed locally on the T18 slice.
 
 The two local skips are environmental, not gaps in coverage:
 
@@ -494,6 +497,16 @@ push, confirm CI green.
    and the read-only `cairn vab dynpart` command. Remaining work: real super
    metadata parsing (lpunpack/lpmake oracles) and modeled merge/cancel
    flows.
+9. **T18 — Modeled snapshot cancel/merge flows (landed, simulator-only).**
+   `cairn.vab.flows` gates `cairn vab cancel|merge` behind: a merge state
+   that matches the flow's precondition (cancel needs `snapshotted` or
+   `merging`; merge needs `merging`; `none` refuses with "nothing to act
+   on"), an exact typed acknowledgment sentence, verified recovery assets
+   and a stated last-resort path (SR-008), and a transcript-replay
+   transport (ADR-027). The executor gained the `snapshot-update`
+   PlanAction for the modeled argv. Cairn never auto-cancels; no real
+   device can be targeted. Remaining M6 work: super metadata parsing
+   oracles, and the external reviews (KU-032).
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session

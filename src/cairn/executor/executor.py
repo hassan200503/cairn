@@ -318,6 +318,12 @@ def _build_step_argv(step: PlanStep, image_path: Path | None) -> tuple[str, ...]
         return ("reboot", step.target)
     if step.action is PlanAction.UPDATE_SUPER:
         return ("update-super",)
+    if step.action is PlanAction.SNAPSHOT_UPDATE:
+        if step.target not in ("cancel", "merge"):
+            raise ExecutorRefused(
+                f"plan step {step.number} snapshot-update target must be cancel or merge"
+            )
+        return ("snapshot-update", step.target)
     raise ExecutorRefused(f"plan step {step.number} has an unsupported action")
 
 

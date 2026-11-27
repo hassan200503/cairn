@@ -359,6 +359,23 @@ overridable) and the CLI command `cairn vab dynpart --mode fastbootd|bootloader`
 Remaining work: real super metadata parsing behind lpunpack/lpmake oracles and
 modeled operator-approved merge/cancel flows.
 
+### T18 - Modeled snapshot cancel and merge flows
+
+**Deliverable:** explicit operator-approved cancel and merge flows with typed
+acknowledgment, recovery readiness, and a matching merge-state precondition,
+runnable only against the transcript simulator.
+**Accept:** cancel refuses a `none` device; merge refuses a merely `snapshotted`
+device; a mismatched or paraphrased acknowledgment is refused; unverified
+recovery assets are refused; every write reaches the transcript replay only.
+**Depends on:** T14, T15, T16.
+**Status:** landed (2026-11-27). `cairn.vab.flows` gates `cairn vab cancel|merge`
+behind the merge-state precondition, an exact typed acknowledgment sentence,
+`verify_assets` recovery readiness plus a stated last-resort path (SR-008), and a
+`SimulatedFastbootTransport` (ADR-027). The executor gained the
+`snapshot-update` PlanAction with a `cancel`/`merge` target check. Cairn never
+auto-cancels. Remaining work: super metadata parsing oracles and the external
+reviews (KU-032).
+
 ---
 
 ## 5. Release gates
