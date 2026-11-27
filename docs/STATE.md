@@ -13,9 +13,9 @@ does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 **Last updated:** 2026-11-27, after the recovery kit and M6 drill slice (T15,
 ADR-028), the Virtual A/B merge-state gate (T16, SR-010), the
 dynamic-partition mode gate (T17, SR-011), the modeled snapshot
-cancel/merge flows (T18), and the safety-rule mutation harness (T19,
-33/33 mutants killed). The vault and drill
-are simulator-only and externally unreviewed (KU-032).
+cancel/merge flows (T18), the safety-rule mutation harness (T19), and the
+approval-binding mutation tests (T20; 48/48 mutants killed). The vault and
+drill are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -356,16 +356,15 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 583 passed, 2 skipped
+uv run pytest -q               # 584 passed, 2 skipped
 ```
 
 The latest CI run is `46003349752` for the T14 executor slice merged through
 pull request [#2](https://github.com/hassan200503/cairn/pull/2) (merge `4cf91bc`)
 and is green: lint, format, and types; the AOSP libsparse sparse oracle; and
-tests on Ubuntu and Windows under Python 3.12 and 3.14. The recovery-kit (T15),
-merge-state (T16), dynamic-partition (T17), and snapshot-flow (T18) slices
+tests on Ubuntu and Windows under Python 3.12 and 3.14. The T15–T20 slices
 postdate that run; their commits' CI runs must be green before merge. The
-583-test baseline above was confirmed locally on the T18 slice.
+584-test baseline above was confirmed locally on the T20 slice.
 
 The two local skips are environmental, not gaps in coverage:
 
@@ -516,7 +515,17 @@ push, confirm CI green.
     satisfying the AGENTS.md "three suite-killed mutants per safety rule"
     requirement for the current rule set. Run it after any change to rule
     logic (`python tools/mutation_check.py`, ~3 minutes, on demand — not in
-    the default CI loop). Remaining work: approval-binding mutation tests.
+    the default CI loop).
+11. **T20 — Approval-binding mutation tests (landed).** The mutation harness
+    gained an `approval` family over `approval/token.py`, `binding.py`, and
+    `device.py`: skipped bound-field comparisons (plan, evidence snapshot,
+    archive, device, package hashes, tools), a verdict-flip on parse failure,
+    neutered signature/binding-hash/key-id checks, a dropped `binding_payload`
+    field, disabled hex64 validation, a dropped required fingerprint fact, and
+    stale required facts accepted. The first run exposed a real gap — no test
+    pinned the `archive_sha256` comparison — now killed by
+    `test_verify_is_false_when_the_archive_hash_changed`. Recorded run:
+    **48/48 mutants killed** (33 rule + 15 approval).
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session
