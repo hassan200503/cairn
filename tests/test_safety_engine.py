@@ -87,6 +87,7 @@ def _context(**overrides: object) -> SafetyContext:
         device_identity=DeviceIdentity("panther", "US", "rev-1"),
         package_identity=PackageIdentity("panther", "US", "rev-1"),
         identity_evidence_ids=("ev-device",),
+        approval=CheckState(Tri.TRUE, "approval binding matches", ("ev-approval",)),
     )
     return replace(base, **overrides)
 
@@ -341,6 +342,70 @@ def test_sr013_inferred_lock_state_is_unknown() -> None:
     assert "inferred" in result.reason
 
 
+def test_sr018_is_unknown_when_approval_is_absent() -> None:
+    context = _context(approval=None)
+    report = ENGINE.evaluate(context, now=NOW)
+    result = _rule(report, "SR-018")
+    assert result.state is Tri.UNKNOWN
+    assert "approval binding is unavailable" in result.reason
+    assert report.can_proceed is False
+    assert "SR-018" in report.blocking
+
+
+def test_sr018_true_requires_evidence() -> None:
+    context = _context(approval=CheckState(Tri.TRUE, "approval binding matches"))
+    result = _rule(ENGINE.evaluate(context, now=NOW), "SR-018")
+    assert result.state is Tri.UNKNOWN
+    assert "no evidence references" in result.reason
+
+
+def test_sr018_false_blocks_and_is_not_overridable() -> None:
+    context = _context(approval=CheckState(Tri.FALSE, "plan hash changed", ("ev-approval",)))
+    report = ENGINE.evaluate(context, now=NOW)
+    result = _rule(report, "SR-018")
+    assert result.state is Tri.FALSE
+    assert report.can_proceed is False
+    assert "SR-018" in report.blocking
+
+    request = OverrideRequest(
+        "SR-018",
+        "alice",
+        "attempted bypass of the approval binding",
+        NOW,
+    )
+    with pytest.raises(SafetyError, match="FALSE may never be overridden"):
+        ENGINE.evaluate(context, overrides=(request,), now=NOW)
+
+
+def test_sr018_passes_through_a_verified_approval_and_keeps_warnings() -> None:
+    context = _context(
+        approval=CheckState(
+            Tri.TRUE,
+            "approval binding matches",
+            ("ev-approval",),
+            ("device binding was caller-supplied, not probed",),
+        )
+    )
+    result = _rule(ENGINE.evaluate(context, now=NOW), "SR-018")
+    assert result.state is Tri.TRUE
+    assert result.evidence_ids == ("ev-approval",)
+    assert any("caller-supplied" in warning for warning in result.warnings)
+
+
+def test_approval_is_excluded_from_the_evidence_snapshot() -> None:
+    without = _context(approval=None)
+    pre = SafetyEngine.pre_approval().evaluate(without, now=NOW)
+    full_without = ENGINE.evaluate(without, now=NOW)
+    full_with = ENGINE.evaluate(_context(), now=NOW)
+
+    assert pre.rule("SR-018") is None
+    assert full_without.evidence_snapshot_sha256 == pre.evidence_snapshot_sha256
+    assert full_with.evidence_snapshot_sha256 == pre.evidence_snapshot_sha256
+    assert full_with.snapshot_excludes == ("SR-018",)
+    assert _rule(full_with, "SR-018").state is Tri.TRUE
+    assert "snapshot excludes: SR-018" in full_with.report_text
+
+
 def test_unknown_rule_does_not_allow_proceeding() -> None:
     context = _context(avb_chain=None)
     report = ENGINE.evaluate(context, now=NOW)
@@ -503,6 +568,8 @@ def test_rule_spec_rejects_invalid_or_overridable_critical_rules() -> None:
         RuleSpec("SR-900", " ")
     with pytest.raises(SafetyError, match="critical"):
         RuleSpec("SR-003", "AVB", unknown_overridable=True)
+    with pytest.raises(SafetyError, match="critical"):
+        RuleSpec("SR-018", "approval", unknown_overridable=True)
 
 
 def test_identity_and_check_inputs_reject_empty_values() -> None:

@@ -92,6 +92,7 @@ uv run cairn plan <package.zip> --index <index.json>
 uv run cairn avb info <vbmeta.img>
 uv run cairn avb digest <vbmeta.img> [--chain boot=<boot.img>]
 uv run cairn avb verify <vbmeta.img> [--key <key.avbpubkey>] [--chain boot=<boot.img>]
+uv run cairn avb key-check <vbmeta.img> --key <key.avbpubkey> --lock-state locked
 uv run cairn rollback read [--serial <serial>] [--simulate <transcript.json>]
 uv run cairn rollback check <vbmeta.img> [--chain boot=<boot.img>] [--stored 3=3]
 uv run cairn rollback check <vbmeta.img> --device [--serial <serial>]
@@ -109,14 +110,22 @@ performs a read-only `getvar all`. Both can replay a recorded transcript with
 entries and nested archives, and can hash every entry with `--hash`. The `cairn
 provenance` command hashes a package and compares it with a local JSON index; a match
 is a signal, not a signature check. `cairn plan` emits a read-only vendor-order dry
-run with a canonical plan hash and refuses to mark it executable unless provenance is
-TRUE and every requested option is modeled. `cairn avb` parses standalone, padded,
+run with a canonical plan hash and a separate safety report. It is executable only
+when both the structural planner and every applicable safety rule permit it. With
+the current command inputs, package provenance is evaluated and unavailable identity,
+AVB, rollback, tool, and lock/key evidence remain explicit `UNKNOWN` blocks; Cairn
+does not invent those facts. `cairn avb` parses standalone, padded,
 or footer-embedded VBMeta images, computes the AOSP digest including supplied
 chained images, and verifies the RSA signature against the embedded key or an
 expected raw AVB public key. With `--chain`, it also follows the chain of trust:
 each chain descriptor's key is matched against the chained image's embedded key,
 the chained signature is checked, and nested chains are followed. Embedded-key
 validity is not a trust anchor. `avb verify` does not check rollback. `cairn
+avb key-check` adds the lock-state context to a valid VBMeta signature and an
+expected key: a locked mismatch is FALSE, while an unlocked mismatch is UNKNOWN
+because the bootloader would not enforce that key. Its lock state and trusted key
+are caller-supplied, so it does not read a device root of trust and cannot itself
+satisfy SR-013. `cairn
 rollback read` performs one read-only `fastboot getvar all` and parses the
 vendor-specific stored-index forms that have been observed:
 `stored_rollback_index:<location> = <value>` and

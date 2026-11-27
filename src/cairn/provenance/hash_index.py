@@ -132,7 +132,25 @@ def verify_manifest(index: HashIndex, manifest: PackageManifest) -> ProvenanceRe
             Tri.UNKNOWN,
             reasons=("archive sha256 was not computed",),
         )
-    archive_hash = manifest.archive_sha256.lower()
+    return verify_package_hashes(
+        index,
+        manifest.archive_sha256,
+        {entry.name: entry.sha256 for entry in manifest.entries},
+    )
+
+
+def verify_package_hashes(
+    index: HashIndex,
+    archive_sha256: str | None,
+    entries: Mapping[str, str | None],
+) -> ProvenanceResult:
+    """Compare recorded archive and entry hashes against the local index."""
+    if archive_sha256 is None:
+        return ProvenanceResult(
+            Tri.UNKNOWN,
+            reasons=("archive sha256 was not computed",),
+        )
+    archive_hash = archive_sha256.lower()
     known = index.packages.get(archive_hash)
     if known is None:
         return ProvenanceResult(
@@ -141,7 +159,7 @@ def verify_manifest(index: HashIndex, manifest: PackageManifest) -> ProvenanceRe
         )
 
     index_entries = known.entry_hashes()
-    manifest_entries = {entry.name: entry.sha256 for entry in manifest.entries}
+    manifest_entries = dict(entries)
     missing = sorted(set(index_entries) - set(manifest_entries))
     extra = sorted(set(manifest_entries) - set(index_entries))
     if missing or extra:

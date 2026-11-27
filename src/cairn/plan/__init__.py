@@ -16,6 +16,7 @@ from cairn.plan.planner import (
     plan_payload,
     verify_plan_hash,
 )
+from cairn.plan.safety import PlanAssessment, assess_plan
 
 __all__ = [
     "DEFAULT_FALLBACK",
@@ -23,11 +24,13 @@ __all__ = [
     "FallbackPlan",
     "Plan",
     "PlanAction",
+    "PlanAssessment",
     "PlanError",
     "PlanFacts",
     "PlanOptions",
     "PlanStep",
     "SlotPolicy",
+    "assess_plan",
     "build_plan",
     "compute_plan_hash",
     "plan_payload",

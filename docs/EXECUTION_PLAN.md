@@ -198,9 +198,13 @@ tri-state fail-closed results where FALSE outranks UNKNOWN outranks TRUE. AOSP
 avbtool-generated unsigned, signed, footer, and two-level chain fixtures validate
 the implementation; the signed fixtures were cross-checked with `openssl` raw RSA
 recovery, and the footer and chain fixtures match the AOSP
-`calculate_vbmeta_digest` output. Embedded-key validity is not a trust anchor:
-per-location rollback handling, the lock-state-aware key check, the Pixel verifier
-oracle, and real vendor hashes are pending.
+`calculate_vbmeta_digest` output. Embedded-key validity is not a trust anchor.
+Per-location rollback handling and an offline lock-state-contextual expected-key
+check (`cairn avb key-check`) are implemented. The key check handles invalid
+signatures, locked mismatches, unlocked mismatches, and unknown inputs fail-closed,
+but its lock state and key are caller-supplied and cannot satisfy SR-013 by itself.
+The Pixel verifier oracle, device lock/key binding, and real vendor hashes are
+pending.
 
 ### T10 - Planner v0 and dry run
 
@@ -224,14 +228,18 @@ evidence graph; override policy; report header.
 UNKNOWN blocks unless the catalog allows it; overrides are logged with text and
 provenance.
 **Depends on:** T03, T09.
-**Status:** partial (2026-11-25). The safety engine implements SR-001 identity,
+**Status:** partial (2026-11-26). The safety engine implements SR-001 identity,
 SR-002 provenance, SR-003 AVB-chain, SR-004 rollback, SR-012 tool identity, and
 SR-013 lock/key aggregation over `CheckState` inputs. FALSE is never overridable;
 UNKNOWN blocks unless the rule is marked overridable; overrides record operator,
 typed reason, timestamp, evidence-snapshot hash, and the exact report text, and do
 not turn UNKNOWN into TRUE. Checks that claim TRUE/FALSE without evidence are
-downgraded to UNKNOWN. Real AVB and rollback inputs still depend on T09/T12, CLI
-wiring into `plan`/execution is pending, and mutation testing has not started.
+downgraded to UNKNOWN. `cairn plan` now binds its structural candidate to a
+SafetyReport and returns executable only if both gates pass; its JSON separates
+`structurally_executable` from `executable` and includes the evidence snapshot.
+It feeds only the provenance evidence it actually has, so SR-001/003/004/012/013
+remain UNKNOWN and block until a catalog-bound preflight collects those inputs.
+Mutation testing has not started.
 
 ### T12 - Rollback Oracle v0
 

@@ -26,6 +26,9 @@ Decisions are append-only. To change one, add a new ADR that supersedes it.
 | ADR-020 | Chain verification is a consistency gate, not a trust gate | Accepted | 2026-11-26 |
 | ADR-021 | Rollback verdicts use the documented inequality; unknown is a hard stop | Accepted | 2026-11-26 |
 | ADR-022 | Device stored-index reads are vendor-specific claims, not AVB verification | Accepted | 2026-11-26 |
+| ADR-023 | A caller-provided lock state is contextual input, not device-trust evidence | Accepted | 2026-11-26 |
+| ADR-024 | Plan structure and safety authorization are separate gates | Accepted | 2026-11-26 |
+| ADR-025 | Approval binding is a consistency gate, enforced as SR-018 before any write | Accepted | 2026-11-27 |
 
 ---
 
@@ -387,3 +390,113 @@ everywhere else. A successful read does not make a package safe; the oracle stil
 applies the AOSP inequality. OEM counter policy, the Pixel `ap-ar-s` mapping, and
 the EDL fallback remain unresolved (KU-005, KU-009, KU-030). A TRUE verdict from
 `rollback check --device` covers only the AVB counters that were evaluated.
+
+---
+
+## ADR-023 - A caller-provided lock state is contextual input, not device-trust evidence
+
+**Context.** The AVB parser can validate an image signature and compare its embedded
+key with a known raw AVB public key. The lock state changes how a key mismatch
+should be read: a locked bootloader enforces the key, while an unlocked bootloader
+does not. However, the current read-only adapter has no hardware finding that
+binds a particular bootloader's lock-state signal or root key to the package.
+
+**Decision.** `cairn avb key-check` accepts an explicit lock-state value and a
+caller-provided expected key only as contextual inputs. It returns FALSE for an
+invalid signature and for a locked mismatch; it returns UNKNOWN for unsigned
+images, missing keys, unknown lock state, and unlocked mismatches. A matching key
+in a supplied context can be TRUE for offline diagnosis, but it is never emitted
+as device evidence and cannot satisfy SR-013. The output explicitly says it did
+not read a device root of trust.
+
+**Consequences.** Technicians can inspect the decisive AVB branches without the
+tool inventing a hardware claim. A genuine device-bound key gate still requires a
+fresh usable lock-state observation, a catalog or hardware finding that anchors
+the key, and CLI-to-safety-engine wiring (KU-029, T11).
+
+---
+
+## ADR-024 - Plan structure and safety authorization are separate gates
+
+**Context.** The planner can prove that a package has a well-formed vendor-order
+dry run, present images, and modeled options. That does not establish device
+identity, AVB authenticity, rollback safety, tool identity, or lock/key state.
+Treating a structurally executable plan as authorization would silently convert
+missing facts into a pass.
+
+**Decision.** `cairn plan` constructs the candidate first, then evaluates the
+SafetyEngine over the evidence the command actually obtained. `PlanAssessment`
+exposes `structurally_executable`, the full `SafetyReport`, and a final
+`executable` value that is true only when both gates pass. The structural plan hash
+and the safety evidence-snapshot hash remain separate inputs for T13 approval
+binding. The CLI supplies no placeholder evidence: absent identity, AVB, rollback,
+tool, or lock/key inputs remain UNKNOWN and block.
+
+**Consequences.** A dry run remains useful and inspectable, while no caller can
+mistake it for permission to execute. A later catalog-bound preflight must collect
+and bind the missing evidence before a plan can be executable (KU-031). No write
+path is introduced.
+
+---
+
+## ADR-025 - Approval binding is a consistency gate, enforced as SR-018
+
+**Context.** The planner hash and the safety evidence snapshot must both be fixed
+before execution, and any silent drift between approval and execution is exactly the
+TOCTOU failure the safety model must catch. Cairn has no authorization secret and
+cannot defend against a fully compromised host (ADR-014). It still needs a
+tamper-evident, reproducible statement that a specific plan over a specific package
+on a specific device with specific tools was approved.
+
+**Decision.** An approval is a canonical binding, not an authorization boundary. It
+covers the plan hash, the evidence-snapshot hash, the archive hash, every package
+entry hash, a device binding (host-generated session nonce plus a fingerprint of the
+required and present optional identity facts from one read-only probe), and the
+identity (name, version, and/or sha256) of every tool used to produce the plan.
+
+The binding is serialized as canonical JSON, hashed to a single `binding_sha256`, and
+signed with HMAC-SHA256 under a 32-byte per-session consistency key. Strict parsing
+rejects duplicate keys, unknown fields, wrong types, a wrong key id, and any binding
+mismatch. Any byte change in any bound input invalidates the approval: `verify`
+returns `FALSE` with named mismatches, or `UNKNOWN` when a required current input
+cannot be established. A caller-supplied device fingerprint is recorded as `CALLER`
+and never treated as device evidence.
+
+The safety engine carries this as rule **SR-018** ("approval binding valid") in the
+post-approval rule set. `PRE_APPROVAL_RULES` omits SR-018 so that `cairn plan` and
+`approval issue` can evaluate the pre-approval gate without the approval that does
+not exist yet; SR-018 is only evaluated when a token is present. SR-018 is in the
+never-overridable set, alongside SR-003, SR-004, SR-012, and SR-013.
+
+**Consequences.** `cairn approval keygen|issue|verify|inspect` exist and write only
+token files, never a device. The key is a consistency key, not a security key, and
+this must be stated wherever the approval is described. Approval binds inputs; it
+does not authorize actions, and no write path is introduced by it (ADR-009, ADR-014).
+
+---
+
+## ADR-026 - Wizard sessions are strict, reloadable consistency records
+
+**Context.** A technician-facing preflight needs resumability without letting an old
+or manually edited observation silently satisfy a current gate. The wizard cannot
+invent a device trust anchor, convert a simulation into evidence, or make an
+approval token authorize a write (ADR-014, ADR-025).
+
+**Decision.** `cairn wizard` is read-only and persists an exact-schema, canonical
+JSON session with duplicate-key rejection, a bounded size, atomic replacement, and
+a state SHA-256. It stores redacted device facts and hashes, never a raw serial or a
+transcript. The state hash is tamper-evident only. Resume may reuse only a fresh,
+successful doctor, probe, or rollback stage whose input fingerprint matches.
+
+Session-bound approval reloads and re-hashes the package and index, compares every
+package entry, rebuilds the recorded plan, and requires the resulting plan hash to
+equal the recorded bundle. Issue requires a fresh `READY` session with a probed
+device binding; verify accepts `READY` or `CLEARED` under the same reload checks.
+Conflicting ad-hoc package, device, tool, nonce, or plan options are rejected rather
+than overriding the session. Simulated sessions and any stale or incomplete session
+remain blocked.
+
+**Consequences.** The wizard improves the read-only technician workflow but adds no
+trust rung, no catalog authority, and no device write path. Until the existing
+catalog-bound preflight and device-bound lock/key anchor exist, a real session may
+properly end `BLOCKED`; this is deliberate.
