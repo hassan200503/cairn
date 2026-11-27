@@ -107,6 +107,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Host Doctor MVP: WSL/VM detection, USB controller check, Windows driver heuristic,
   USB selective-suspend check, antivirus warning, tool manifest checks, and a bounded
   `getvar` link soak with failure and latency thresholds. Read-only by construction.
+- Read-only `cairn wizard`: an atomic, bounded, strict-JSON, canonical session record
+  that chains doctor, inspect, provenance, probe, AVB, rollback, plan, and optional
+  approval verification. Resume reuses only fresh successful matching observations;
+  simulations are labeled `SIMULATED` and never become device evidence. The wizard
+  writes no device and cannot elevate UNKNOWN safety facts.
+- Session-bound approval issue/verify: `approval issue --session` requires a fresh
+  `READY` session; both paths reload the package and index, re-hash entries, rebuild
+  the plan, and reject archive, index, entry, or plan drift. The session hash is
+  tamper-evident rather than a security boundary.
 
 ### Known limitations
 

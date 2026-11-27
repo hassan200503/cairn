@@ -10,7 +10,7 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-26, after the safety-gated plan slice.
+**Last updated:** 2026-11-27, after the read-only resumable wizard slice.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -68,6 +68,7 @@ src/cairn/
   rollback/      rollback oracle plus vendor-specific device stored-index reader
   safety/        safety rule engine and override policy
   sim/           transcript schema, recorder/replayer, fault-injecting fastboot simulator
+  wizard/        resumable read-only preflight stages, strict session persistence, rendering
 ```
 
 Design notes, in the order the reader should meet them:
@@ -100,9 +101,11 @@ Design notes, in the order the reader should meet them:
 | `cairn inspect PACKAGE` | read-only factory/OTA zip inspection, no extraction | 0/1 |
 | `cairn provenance PACKAGE --index INDEX` | match a package against a local hash index | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn plan PACKAGE --index INDEX` | read-only vendor-order dry run plus SR-001/002/003/004/012/013 safety report | 0 both structural and safety gates pass / 1 error / 3 blocked |
+| `cairn wizard PACKAGE --index INDEX --state SESSION [--resume \| --force]` | resumable, read-only preflight: doctor, inspect, provenance, probe, AVB, rollback, plan, and optional approval verification | 0 only when every supplied stage and post-approval gate passes / 1 failed / 3 blocked or simulated |
 | `cairn approval keygen --out KEY` | create a 32-byte approval consistency key (never a device write) | 0/1 |
 | `cairn approval issue PACKAGE --index INDEX --key KEY --operator OP --reason TEXT --nonce NONCE (--fastboot PATH [--serial S] \| --device-fingerprint HEX)` | issue an HMAC-signed approval token after the pre-approval gate passes | 0/1/2/3 |
 | `cairn approval verify TOKEN PACKAGE --index INDEX --key KEY --nonce NONCE (--fastboot PATH \| --device-fingerprint HEX)` | compare a token against the current plan, evidence snapshot, package, device, and tools | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
+| `cairn approval issue --session SESSION ...` / `cairn approval verify TOKEN --session SESSION --key KEY` | issue only from a fresh `READY` session, or verify against a fresh `READY`/`CLEARED` session after package, index, entry-hash, and plan-hash reload | 0/1/2/3 |
 | `cairn approval inspect TOKEN --key KEY` | verify and print a signed approval token | 0/1 |
 | `cairn avb info IMAGE` | parse VBMeta headers and descriptors | 0/1 |
 | `cairn avb digest IMAGE [--chain NAME=PATH]` | compute the AOSP VBMeta digest | 0/1/2 |
@@ -302,7 +305,7 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 501 passed, 2 skipped
+uv run pytest -q               # 506 passed, 2 skipped
 ```
 
 The latest CI run is `45951665085` for `e358aea` on pull request
@@ -407,12 +410,17 @@ push, confirm CI green.
    verification, encrypted device-bound vault design, restore-only-same-device
    rule, and a recovery drill script.
 
-The **guided session orchestrator** (`cairn wizard`) is the next slice, in front of
-T14 as the M11 spine: one resumable, fail-closed, read-only flow that chains
-doctor → probe → inspect → provenance → AVB → rollback → plan → approval and
-explains each step with its verification level. It writes no device and adds no
-new trust rung; it makes the existing read-only primitives usable by a technician
-and is the substrate the future write path will hang from.
+The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
+front of T14. It persists an atomically written, byte-bounded, strict JSON session
+with a canonical state hash and no raw serial or transcript. Its read-only stages
+are doctor → inspect → provenance → probe → AVB → rollback → plan → approval. It
+reuses only fresh successful doctor, probe, and rollback observations with matching
+input fingerprints; it reloads package and index bytes before a session-based
+approval is issued or verified. A simulated transcript is explicitly `SIMULATED`,
+not device evidence. The wizard adds no trust rung, performs no device write, and
+cannot turn missing catalog/device facts into a pass. `READY` therefore remains
+unreachable until the existing device-bound/canonical-preflight unknowns are
+resolved; this is intentional fail-closed behavior, not a wizard defect.
 
 ---
 

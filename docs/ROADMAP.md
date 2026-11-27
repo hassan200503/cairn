@@ -1,6 +1,6 @@
 # Cairn Roadmap
 
-**Status as of 2026-11-26.** Milestones are cumulative. A milestone is complete only
+**Status as of 2026-11-27.** Milestones are cumulative. A milestone is complete only
 when its acceptance test is reproducible from a clean checkout.
 
 | Milestone | Scope | Acceptance | Status |
@@ -16,7 +16,7 @@ when its acceptance test is reproducible from a clean checkout.
 | M8 | `adb sideload` and `update_engine` path with OTA metadata checks | Signed full OTA verified and applied through the native path; downgrade checks enforced | Not started |
 | M9 | Samsung adapter with pluggable backend, Knox irreversibles, Maintenance Mode handling | Simulator suite plus two real models; detect/validate/dry-run only for new models until proven; SR-021 enforced | Not started |
 | M10 | EDL and MediaTek adapters, Assisted tier | Programmer/DA mismatch always vetoed; no auth bypass; read-back used where permitted | Not started |
-| M11 | Wizard, installer, signed catalog updates, explainer, link model | Link model beats the rule baseline offline; signed catalog rotation tested; installer consent-first | Not started |
+| M11 | Wizard, installer, signed catalog updates, explainer, link model | Link model beats the rule baseline offline; signed catalog rotation tested; installer consent-first | **Partial** - the read-only resumable wizard and session-bound approval handoff landed; installer, signed catalog rotation, explainer, and link model remain unstarted |
 | M12 | Unisoc analysis-only support | Read-only analysis; no flashing claims | Not started |
 
 ---
@@ -93,8 +93,14 @@ Exit gate: G5.
 
 ### M11 - Usability and catalog
 
-Wizard, installer, signed catalog updates, explainer, link model. The link model must
-beat the rule baseline offline or it does not ship.
+The read-only `cairn wizard` now persists strict, canonical, bounded sessions and
+chains doctor, package inspection/provenance, probe, AVB, rollback, planning, and
+optional approval verification. Resume only reuses fresh successful observations
+whose input fingerprints still match; session-based approval reloads the package,
+hash index, entries, and plan before binding or checking a token. Simulations remain
+non-device evidence, no stage writes a device, and unavailable safety evidence still
+blocks. Installer, signed catalog updates, explainer, and link model remain pending.
+The link model must beat the rule baseline offline or it does not ship.
 
 ### M12 - Unisoc analysis
 

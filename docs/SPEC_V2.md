@@ -354,6 +354,7 @@ CLI / Shop Mode / wizard (web later)
 | Rollback Oracle | Answers "can this package lower any counter on this device?" |
 | Safety engine | Evaluates rules over evidence; TRUE/FALSE/UNKNOWN; overrides |
 | Approval | Binds plan, package, snapshot, nonce, and tool versions |
+| Wizard session | Read-only, resumable technician preflight; canonical state record and fail-closed approval handoff |
 | Executor | Journaled operations, crash-safe reconcile, verification levels |
 | Host Doctor | Drivers, topology, power, cable, link soak |
 | Recovery Kit + Vault | Host-verified recovery assets; encrypted device-bound backups |
@@ -380,6 +381,28 @@ Rules:
 - A probe from before a reboot does not satisfy a precondition after the reboot.
 - Catalog claims and user assertions are weaker than direct probes.
 - Rule results carry the evidence IDs and source references that produced them.
+
+### 3.2.1 Read-only wizard sessions
+
+`cairn wizard` is an orchestration surface, not a new verifier and not an
+executor. It runs doctor, inspection, provenance, probe, AVB, rollback, planning,
+and optional approval verification in that order. It never invokes a write-capable
+device operation.
+
+The session file is canonical JSON with a schema version, exact-key parsing,
+duplicate-key rejection, an 8 MiB bound, atomic replacement, and a SHA-256 state
+hash. It contains hashes and redacted device facts, not a raw serial or transcript.
+The hash detects accidental edits; it is not a defense against a compromised host.
+Only fresh successful doctor, probe, and rollback stages whose input fingerprints
+still match can be reused. A simulated stage is `SIMULATED`, never usable device
+evidence. A blocked, failed, stale, or changed input is rerun or blocks; it is never
+silently reused.
+
+`approval issue --session` accepts only a fresh `READY` session. Both session-based
+issue and verify reload the package and index, re-hash package entries, and rebuild
+the plan before constructing current approval inputs. Any archive, index, entry, or
+plan-hash drift is a refusal. This remains a consistency boundary under section
+2.10, not authorization and not permission to write.
 
 ### 3.3 Strategy ladder
 

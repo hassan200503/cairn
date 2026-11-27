@@ -38,6 +38,7 @@ from cairn.provenance.hash_index import (
     ProvenanceResult,
     load_hash_index,
     verify_manifest,
+    verify_package_hashes,
 )
 from cairn.provenance.trust import (
     MAX_TRUSTED_KEY_BYTES,
@@ -84,6 +85,7 @@ __all__ = [
     "parse_vbmeta",
     "parse_vbmeta_image",
     "verify_manifest",
+    "verify_package_hashes",
     "verify_vbmeta_chain",
     "verify_vbmeta_signature",
 ]

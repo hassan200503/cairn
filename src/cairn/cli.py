@@ -85,6 +85,17 @@ from cairn.safety.engine import SafetyContext, SafetyEngine
 from cairn.sim.transcript import TRANSCRIPT_ENV
 from cairn.tools.manifest import TOOL_MANIFEST
 from cairn.tools.runner import ToolRunner
+from cairn.wizard.render import render_session, session_exit_code
+from cairn.wizard.runner import run_wizard
+from cairn.wizard.session import (
+    SessionOutcome,
+    WizardError,
+    load_session,
+)
+from cairn.wizard.stages import (
+    WizardOptions,
+    reload_session_plan,
+)
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -282,6 +293,116 @@ def build_parser() -> argparse.ArgumentParser:
         help="tool identity bound in the approval; repeat as needed",
     )
 
+    wizard = subparsers.add_parser(
+        "wizard",
+        help="run the read-only, resumable preflight wizard",
+    )
+    wizard.add_argument("package", type=Path, help="factory or OTA zip")
+    wizard.add_argument(
+        "--index",
+        type=Path,
+        required=True,
+        help="local hash-index JSON",
+    )
+    wizard.add_argument(
+        "--state",
+        type=Path,
+        required=True,
+        help="wizard session JSON path",
+    )
+    state_mode = wizard.add_mutually_exclusive_group()
+    state_mode.add_argument(
+        "--resume",
+        action="store_true",
+        help="reuse fresh doctor, probe, and rollback stages from --state",
+    )
+    state_mode.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing session and ignore prior stages",
+    )
+    wizard.add_argument(
+        "--fastboot",
+        type=Path,
+        help="path to the official fastboot executable (default: CAIRN_FASTBOOT or PATH)",
+    )
+    wizard.add_argument("--serial", help="target device serial")
+    wizard.add_argument(
+        "--soak",
+        type=int,
+        default=SOAK_ATTEMPTS_DEFAULT,
+        metavar="N",
+        help=f"link soak probe count (default {SOAK_ATTEMPTS_DEFAULT}; 0 disables)",
+    )
+    wizard_source = wizard.add_mutually_exclusive_group()
+    wizard_source.add_argument(
+        "--simulate",
+        type=Path,
+        metavar="TRANSCRIPT",
+        help="replay a transcript instead of touching hardware",
+    )
+    wizard_source.add_argument(
+        "--device-fingerprint",
+        help="caller-supplied 64-hex fingerprint; weaker than a probe",
+    )
+    wizard.add_argument("--vbmeta", type=Path, help="VBMeta image for AVB and rollback checks")
+    wizard.add_argument(
+        "--chain",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help="chained partition image; repeat for multiple chains",
+    )
+    wizard.add_argument(
+        "--key",
+        type=Path,
+        metavar="AVBPUBKEY",
+        help="expected raw AVB public key",
+    )
+    wizard.add_argument(
+        "--lock-state",
+        choices=("locked", "unlocked", "unknown"),
+        help="caller lock state; not device evidence and does not satisfy SR-013",
+    )
+    wizard.add_argument(
+        "--stored",
+        action="append",
+        default=[],
+        metavar="LOCATION=VALUE",
+        help="caller-supplied stored rollback index; requires --device-fingerprint",
+    )
+    wizard.add_argument(
+        "--slot",
+        choices=[policy.value for policy in SlotPolicy],
+        default=SlotPolicy.CURRENT.value,
+        help="slot policy",
+    )
+    wizard.add_argument("--rollback-slot", default=None, help="slot for rollback counters")
+    wizard.add_argument("--wipe", action="store_true", help="include vendor if-wipe commands")
+    wizard.add_argument(
+        "--retrofit-force",
+        action="store_true",
+        help="request the unmodeled retrofit force case",
+    )
+    wizard.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME=VERSION[@SHA256]",
+        help="bind another tool identity; repeat as needed",
+    )
+    wizard.add_argument("--approval", type=Path, metavar="TOKEN", help="approval token to verify")
+    wizard.add_argument(
+        "--approval-key",
+        type=Path,
+        help="approval key file (requires --approval)",
+    )
+    wizard.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
     approval = subparsers.add_parser(
         "approval",
         help="issue and verify signed approval bindings (no device writes)",
@@ -332,12 +453,16 @@ def build_parser() -> argparse.ArgumentParser:
         "issue",
         help="issue a token after the pre-approval safety report passes",
     )
-    approval_issue.add_argument("package", type=Path, help="factory or OTA zip")
+    approval_issue.add_argument("package", type=Path, nargs="?", help="factory or OTA zip")
     approval_issue.add_argument(
         "--index",
         type=Path,
-        required=True,
         help="local hash-index JSON",
+    )
+    approval_issue.add_argument(
+        "--session",
+        type=Path,
+        help="issue from a READY wizard session instead of a package",
     )
     approval_issue.add_argument(
         "--key",
@@ -357,10 +482,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     approval_issue.add_argument(
         "--nonce",
-        required=True,
-        help="session nonce, 32-128 lowercase hex",
+        help="session nonce, 32-128 lowercase hex (without --session)",
     )
-    issue_source = approval_issue.add_mutually_exclusive_group(required=True)
+    issue_source = approval_issue.add_mutually_exclusive_group()
     issue_source.add_argument(
         "--device-fingerprint",
         help="caller-supplied 64-hex fingerprint; weaker than a probe",
@@ -395,12 +519,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="verify a token against the current plan and evidence",
     )
     approval_verify.add_argument("token", type=Path, help="approval token JSON")
-    approval_verify.add_argument("package", type=Path, help="factory or OTA zip")
+    approval_verify.add_argument("package", type=Path, nargs="?", help="factory or OTA zip")
     approval_verify.add_argument(
         "--index",
         type=Path,
-        required=True,
         help="local hash-index JSON",
+    )
+    approval_verify.add_argument(
+        "--session",
+        type=Path,
+        help="verify against a wizard session instead of a package",
     )
     approval_verify.add_argument(
         "--key",
@@ -410,10 +538,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     approval_verify.add_argument(
         "--nonce",
-        required=True,
-        help="session nonce, 32-128 lowercase hex",
+        help="session nonce, 32-128 lowercase hex (without --session)",
     )
-    verify_source = approval_verify.add_mutually_exclusive_group(required=True)
+    verify_source = approval_verify.add_mutually_exclusive_group()
     verify_source.add_argument(
         "--device-fingerprint",
         help="caller-supplied 64-hex fingerprint; weaker than a probe",
@@ -636,6 +763,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "plan":
         return _run_plan(args)
+
+    if args.command == "wizard":
+        return _run_wizard(args)
 
     if args.command == "approval":
         return _run_approval(args)
@@ -990,6 +1120,91 @@ def _run_plan(args: argparse.Namespace) -> int:
     return EXIT_OK if assessment.executable else EXIT_UNKNOWN
 
 
+def _run_wizard(args: argparse.Namespace) -> int:
+    if args.soak < 0:
+        print("cairn wizard: --soak must not be negative", file=sys.stderr)
+        return EXIT_USAGE
+    if args.stored and args.device_fingerprint is None:
+        print(
+            "cairn wizard: --stored requires --device-fingerprint; "
+            "caller stored indexes are not device evidence",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.approval is not None and args.approval_key is None:
+        print("cairn wizard: --approval requires --approval-key", file=sys.stderr)
+        return EXIT_USAGE
+    if args.approval is None and args.approval_key is not None:
+        print("cairn wizard: --approval-key requires --approval", file=sys.stderr)
+        return EXIT_USAGE
+    if args.vbmeta is None and (args.chain or args.key is not None):
+        print("cairn wizard: --chain and --key require --vbmeta", file=sys.stderr)
+        return EXIT_USAGE
+
+    chain = _parse_chain(args.chain, "cairn wizard")
+    if chain is None:
+        return EXIT_USAGE
+    stored = _parse_stored_indexes(args.stored, "cairn wizard")
+    if stored is None:
+        return EXIT_USAGE
+    tools = _parse_tool_bindings(args.tool, "cairn wizard")
+    if tools is None:
+        return EXIT_USAGE
+
+    options = WizardOptions(
+        package=args.package,
+        index=args.index,
+        state=args.state,
+        fastboot=args.fastboot,
+        serial=args.serial,
+        simulate=args.simulate,
+        device_fingerprint=args.device_fingerprint,
+        soak=args.soak,
+        vbmeta=args.vbmeta,
+        chain=chain,
+        key=args.key,
+        lock_state=args.lock_state,
+        stored=stored,
+        slot_policy=SlotPolicy(args.slot),
+        rollback_slot=args.rollback_slot,
+        wipe=args.wipe,
+        retrofit_force=args.retrofit_force,
+        tools=tools,
+        approval=args.approval,
+        approval_key=args.approval_key,
+        resume=args.resume,
+        force=args.force,
+    )
+    try:
+        session = run_wizard(options)
+    except (WizardError, OSError) as exc:
+        print(f"cairn wizard: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(session.to_dict(), indent=2))
+    else:
+        print(render_session(session))
+    return session_exit_code(session)
+
+
+def _parse_chain(specs: list[str], command: str) -> dict[str, Path] | None:
+    chain: dict[str, Path] = {}
+    for spec in specs:
+        name, separator, path_text = spec.partition("=")
+        if not separator or not name or not path_text:
+            print(
+                f"{command}: malformed --chain {spec!r}; use NAME=PATH",
+                file=sys.stderr,
+            )
+            return None
+        if name in chain:
+            print(f"{command}: duplicate chain partition {name!r}", file=sys.stderr)
+            return None
+        chain[name] = Path(path_text)
+    return chain
+
+
 def _run_approval(args: argparse.Namespace) -> int:
     if args.approval_command == "keygen":
         return _run_approval_keygen(args)
@@ -1043,6 +1258,40 @@ def _run_approval_inspect(args: argparse.Namespace) -> int:
 
 
 def _run_approval_issue(args: argparse.Namespace) -> int:
+    if args.session is not None:
+        if _session_approval_conflicts(args, "cairn approval issue"):
+            return EXIT_USAGE
+        try:
+            key = load_approval_key(args.key)
+            inputs = _session_approval_inputs(
+                args.session,
+                "cairn approval issue",
+                require_ready=True,
+            )
+            token = issue_approval(
+                inputs,
+                key,
+                operator=args.operator,
+                reason=args.reason,
+            )
+        except (ApprovalError, WizardError) as exc:
+            print(f"cairn approval issue: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+        return _finish_approval_issue(args, token)
+
+    if args.package is None or args.index is None or args.nonce is None:
+        print(
+            "cairn approval issue: package, --index, and --nonce are required without --session",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.device_fingerprint is None and args.fastboot is None:
+        print(
+            "cairn approval issue: choose --device-fingerprint or --fastboot",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     tools = _parse_tool_bindings(args.tool, "cairn approval issue")
     if tools is None:
         return EXIT_USAGE
@@ -1112,42 +1361,50 @@ def _run_approval_issue(args: argparse.Namespace) -> int:
         print(f"cairn approval issue: {exc}", file=sys.stderr)
         return EXIT_FAILED
 
-    token_text = token.to_json()
-    if args.out is None or str(args.out) == "-":
-        print(token_text, end="")
-        return EXIT_OK
-    try:
-        args.out.write_text(token_text, encoding="utf-8", newline="\n")
-    except OSError as exc:
-        print(
-            f"cairn approval issue: cannot write token {args.out}: {exc}",
-            file=sys.stderr,
-        )
-        return EXIT_FAILED
-
-    payload = {
-        "token": str(args.out),
-        "token_sha256": _text_sha256(token_text),
-        "key_id": token.key_id,
-        "binding_sha256": token.binding_sha256,
-        "plan_sha256": token.inputs.plan_sha256,
-        "evidence_snapshot_sha256": token.inputs.evidence_snapshot_sha256,
-        "device_source": token.inputs.device.source.value,
-        "tools": [tool.to_dict() for tool in token.inputs.tools],
-    }
-    if args.json:
-        print(json.dumps(payload, indent=2))
-    else:
-        print(f"approval token: {args.out}")
-        print(f"token sha256: {payload['token_sha256']}")
-        print(f"key id: {token.key_id}")
-        print(f"binding sha256: {token.binding_sha256}")
-        print(f"device source: {token.inputs.device.source.value}")
-        print("note: the token is a consistency boundary, not an authorization boundary")
-    return EXIT_OK
+    return _finish_approval_issue(args, token)
 
 
 def _run_approval_verify(args: argparse.Namespace) -> int:
+    if args.session is not None:
+        if _session_approval_conflicts(args, "cairn approval verify"):
+            return EXIT_USAGE
+        try:
+            key = load_approval_key(args.key)
+            token_text = _read_token_text(args.token)
+            current = _session_approval_inputs(
+                args.session,
+                "cairn approval verify",
+                require_ready=False,
+            )
+        except (ApprovalError, WizardError) as exc:
+            print(f"cairn approval verify: {exc}", file=sys.stderr)
+            return EXIT_FAILED
+        verdict = verify_approval(token_text, key, current)
+        payload = verdict.to_dict() | {
+            "plan_sha256": current.plan_sha256,
+            "evidence_snapshot_sha256": current.evidence_snapshot_sha256,
+            "archive_sha256": current.archive_sha256,
+            "device_source": current.device.source.value,
+            "tools": [tool.to_dict() for tool in current.tools],
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+        else:
+            _print_approval_verdict(verdict, current)
+        return _exit_code_for_tri(verdict.state)
+
+    if args.package is None or args.index is None or args.nonce is None:
+        print(
+            "cairn approval verify: package, --index, and --nonce are required without --session",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.device_fingerprint is None and args.fastboot is None:
+        print(
+            "cairn approval verify: choose --device-fingerprint or --fastboot",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     tools = _parse_tool_bindings(args.tool, "cairn approval verify")
     if tools is None:
         return EXIT_USAGE
@@ -1211,6 +1468,112 @@ def _run_approval_verify(args: argparse.Namespace) -> int:
     else:
         _print_approval_verdict(verdict, current)
     return _exit_code_for_tri(verdict.state)
+
+
+def _session_approval_conflicts(args: argparse.Namespace, command: str) -> bool:
+    """Reject inputs that could silently replace a recorded session binding."""
+    conflicting = (
+        ("package", args.package),
+        ("--index", args.index),
+        ("--nonce", args.nonce),
+        ("--device-fingerprint", args.device_fingerprint),
+        ("--fastboot", args.fastboot),
+        ("--serial", args.serial),
+    )
+    supplied = [name for name, value in conflicting if value is not None]
+    if args.tool:
+        supplied.append("--tool")
+    if args.wipe:
+        supplied.append("--wipe")
+    if args.slot != SlotPolicy.CURRENT.value:
+        supplied.append("--slot")
+    if args.retrofit_force:
+        supplied.append("--retrofit-force")
+    if supplied:
+        print(
+            f"{command}: --session cannot be combined with " + ", ".join(supplied),
+            file=sys.stderr,
+        )
+        return True
+    return False
+
+
+def _session_approval_inputs(
+    path: Path,
+    command: str,
+    *,
+    require_ready: bool,
+) -> ApprovalInputs:
+    """Reload session artifacts and reconstruct the immutable approval binding."""
+    session = load_session(path)
+    allowed = (
+        (SessionOutcome.READY,) if require_ready else (SessionOutcome.READY, SessionOutcome.CLEARED)
+    )
+    if session.outcome not in allowed:
+        expected = "READY" if require_ready else "READY or CLEARED"
+        raise WizardError(f"{command} requires a {expected} wizard session")
+    if session.bundle is None or session.device is None or session.pre_safety is None:
+        raise WizardError("wizard session is missing its approval binding inputs")
+    if session.pre_safety.get("can_proceed") is not True:
+        raise WizardError("wizard session pre-approval safety gate does not permit approval")
+    snapshot = session.pre_safety.get("evidence_snapshot_sha256")
+    if snapshot != session.bundle.evidence_snapshot_sha256:
+        raise WizardError("wizard session safety snapshot does not match its approval bundle")
+    binding = session.device.binding()
+    if binding is None:
+        raise WizardError("wizard session device binding is unavailable")
+    if binding.source.value != "probed" or not session.device.is_fresh(datetime.now(UTC)):
+        raise WizardError(
+            "wizard session device probe is stale or not device evidence; rerun wizard"
+        )
+
+    reloaded = reload_session_plan(session)
+    if reloaded.plan.plan_sha256 != session.bundle.plan_sha256:
+        raise WizardError("reloaded wizard plan does not match its approval bundle")
+    return ApprovalInputs(
+        plan_sha256=session.bundle.plan_sha256,
+        evidence_snapshot_sha256=session.bundle.evidence_snapshot_sha256,
+        archive_sha256=session.bundle.archive_sha256,
+        package_hashes=session.bundle.package_hashes,
+        device=binding,
+        tools=session.bundle.tools,
+    )
+
+
+def _finish_approval_issue(args: argparse.Namespace, token: ApprovalToken) -> int:
+    token_text = token.to_json()
+    if args.out is None or str(args.out) == "-":
+        print(token_text, end="")
+        return EXIT_OK
+    try:
+        args.out.write_text(token_text, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print(
+            f"cairn approval issue: cannot write token {args.out}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+
+    payload = {
+        "token": str(args.out),
+        "token_sha256": _text_sha256(token_text),
+        "key_id": token.key_id,
+        "binding_sha256": token.binding_sha256,
+        "plan_sha256": token.inputs.plan_sha256,
+        "evidence_snapshot_sha256": token.inputs.evidence_snapshot_sha256,
+        "device_source": token.inputs.device.source.value,
+        "tools": [tool.to_dict() for tool in token.inputs.tools],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"approval token: {args.out}")
+        print(f"token sha256: {payload['token_sha256']}")
+        print(f"key id: {token.key_id}")
+        print(f"binding sha256: {token.binding_sha256}")
+        print(f"device source: {token.inputs.device.source.value}")
+        print("note: the token is a consistency boundary, not an authorization boundary")
+    return EXIT_OK
 
 
 def _approval_device(

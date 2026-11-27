@@ -472,3 +472,31 @@ never-overridable set, alongside SR-003, SR-004, SR-012, and SR-013.
 token files, never a device. The key is a consistency key, not a security key, and
 this must be stated wherever the approval is described. Approval binds inputs; it
 does not authorize actions, and no write path is introduced by it (ADR-009, ADR-014).
+
+---
+
+## ADR-026 - Wizard sessions are strict, reloadable consistency records
+
+**Context.** A technician-facing preflight needs resumability without letting an old
+or manually edited observation silently satisfy a current gate. The wizard cannot
+invent a device trust anchor, convert a simulation into evidence, or make an
+approval token authorize a write (ADR-014, ADR-025).
+
+**Decision.** `cairn wizard` is read-only and persists an exact-schema, canonical
+JSON session with duplicate-key rejection, a bounded size, atomic replacement, and
+a state SHA-256. It stores redacted device facts and hashes, never a raw serial or a
+transcript. The state hash is tamper-evident only. Resume may reuse only a fresh,
+successful doctor, probe, or rollback stage whose input fingerprint matches.
+
+Session-bound approval reloads and re-hashes the package and index, compares every
+package entry, rebuilds the recorded plan, and requires the resulting plan hash to
+equal the recorded bundle. Issue requires a fresh `READY` session with a probed
+device binding; verify accepts `READY` or `CLEARED` under the same reload checks.
+Conflicting ad-hoc package, device, tool, nonce, or plan options are rejected rather
+than overriding the session. Simulated sessions and any stale or incomplete session
+remain blocked.
+
+**Consequences.** The wizard improves the read-only technician workflow but adds no
+trust rung, no catalog authority, and no device write path. Until the existing
+catalog-bound preflight and device-bound lock/key anchor exist, a real session may
+properly end `BLOCKED`; this is deliberate.
