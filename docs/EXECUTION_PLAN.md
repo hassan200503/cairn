@@ -239,7 +239,8 @@ SafetyReport and returns executable only if both gates pass; its JSON separates
 `structurally_executable` from `executable` and includes the evidence snapshot.
 It feeds only the provenance evidence it actually has, so SR-001/003/004/012/013
 remain UNKNOWN and block until a catalog-bound preflight collects those inputs.
-Mutation testing has not started.
+Mutation testing of the safety rules landed with T19 (`tools/mutation_check.py`):
+33/33 mutants killed across all 11 registered rules.
 
 ### T12 - Rollback Oracle v0
 
@@ -375,6 +376,23 @@ behind the merge-state precondition, an exact typed acknowledgment sentence,
 `snapshot-update` PlanAction with a `cancel`/`merge` target check. Cairn never
 auto-cancels. Remaining work: super metadata parsing oracles and the external
 reviews (KU-032).
+
+### T19 - Safety-rule mutation harness
+
+**Deliverable:** an on-demand mutation runner that mutates each registered
+safety-rule evaluator and proves the suite kills it.
+**Accept:** every rule in `DEFAULT_RULES` has at least three suite-killed
+mutants; the harness leaves the engine source byte-identical after a run.
+**Depends on:** T11.
+**Status:** landed (2026-11-27). `tools/mutation_check.py` (stdlib only) wraps
+each rule's registration in `DEFAULT_RULES` with three mutants — `always-true`,
+`unknown-true` (the silent-pass mutant), and `false-true` (the unsafe-pass
+mutant) — and runs the safety-relevant test files in a subprocess per mutant.
+Recorded run: **33/33 mutants killed** across SR-001, 002, 003, 004, 008, 009,
+010, 011, 012, 013, and 018. The harness fails loudly if a refactor changes a
+registration site, and restores the engine byte-exactly in all paths. Run it
+after any change to rule logic; it is not in the default CI loop (roughly three
+minutes). Approval-binding mutation tests remain separate future work.
 
 ---
 
