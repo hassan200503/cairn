@@ -54,6 +54,7 @@ from cairn.executor import (
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
 from cairn.package.archive import PackageError, PackageManifest, load_package
 from cairn.plan.planner import (
+    PlanAction,
     PlanError,
     PlanOptions,
     PlanStep,
@@ -84,6 +85,21 @@ from cairn.provenance.hash_index import (
     verify_manifest,
 )
 from cairn.provenance.trust import LockKeyCheck, LockState, evaluate_lock_key
+from cairn.recovery import (
+    DrillError,
+    DrillInputs,
+    DrillReport,
+    VaultDevice,
+    VaultDeviceMismatch,
+    VaultError,
+    VaultTamperedError,
+    create_vault,
+    decrypt_entry,
+    load_vault,
+    restore_check,
+    run_drill,
+    save_vault,
+)
 from cairn.rollback.device import (
     DeviceRollbackRead,
     read_stored_rollback_indexes,
@@ -132,6 +148,36 @@ def _add_plan_options(parser: argparse.ArgumentParser) -> None:
         "--retrofit-force",
         action="store_true",
         help="request the unmodeled retrofit force case",
+    )
+
+
+def _add_vault_device_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--product",
+        required=True,
+        help="device product identity recorded in the vault",
+    )
+    parser.add_argument(
+        "--serial-sha256",
+        required=True,
+        metavar="HASH",
+        help="sha256 of the device serial; the raw serial is never accepted",
+    )
+    parser.add_argument(
+        "--device-fingerprint",
+        required=True,
+        metavar="HASH",
+        help="64-hex device fingerprint hash",
+    )
+    parser.add_argument(
+        "--passphrase-file",
+        type=Path,
+        help="file containing the vault passphrase (falls back to CAIRN_VAULT_PASSPHRASE)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
     )
 
 
@@ -485,6 +531,121 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="emit machine-readable output",
     )
+
+    recovery = subparsers.add_parser(
+        "recovery",
+        help="recovery kit: device-bound vault backups and the M6 drill (simulator only)",
+    )
+    recovery_sub = recovery.add_subparsers(
+        dest="recovery_command",
+        metavar="subcommand",
+    )
+    recovery_backup = recovery_sub.add_parser(
+        "backup",
+        help="encrypt a critical partition image into a device-bound vault",
+    )
+    recovery_backup.add_argument("--partition", required=True, help="partition name")
+    recovery_backup.add_argument(
+        "--asset",
+        type=Path,
+        required=True,
+        help="image file to back up",
+    )
+    recovery_backup.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="vault file to create",
+    )
+    _add_vault_device_args(recovery_backup)
+    recovery_verify = recovery_sub.add_parser(
+        "verify",
+        help="verify a vault's MAC and recorded plaintext hashes",
+    )
+    recovery_verify.add_argument("vault", type=Path, help="vault file")
+    recovery_verify.add_argument(
+        "--passphrase-file",
+        type=Path,
+        help="file containing the vault passphrase (falls back to CAIRN_VAULT_PASSPHRASE)",
+    )
+    recovery_verify.add_argument("--json", action="store_true", help="emit JSON output")
+    recovery_restore = recovery_sub.add_parser(
+        "restore",
+        help="restore a vault entry to its bound device in the simulator only",
+    )
+    recovery_restore.add_argument("vault", type=Path, help="vault file")
+    recovery_restore.add_argument("--partition", required=True, help="partition to restore")
+    recovery_restore.add_argument(
+        "--simulate",
+        type=Path,
+        required=True,
+        metavar="TRANSCRIPT",
+        help="transcript to replay; the only permitted restore target",
+    )
+    recovery_restore.add_argument(
+        "--journal",
+        type=Path,
+        help="write-ahead journal path (default: <vault>.drill-journal)",
+    )
+    recovery_restore.add_argument(
+        "--staging-dir",
+        type=Path,
+        help="directory for decrypted image staging (default: a fresh temporary directory)",
+    )
+    _add_vault_device_args(recovery_restore)
+    recovery_drill = recovery_sub.add_parser(
+        "drill",
+        help="run the M6 recovery drill: verify, back up, restore same-device, refuse cross-device",
+    )
+    recovery_drill.add_argument("--partition", required=True, help="partition name")
+    recovery_drill.add_argument(
+        "--asset",
+        type=Path,
+        required=True,
+        help="image file the drill backs up and restores",
+    )
+    recovery_drill.add_argument(
+        "--expected-sha256",
+        required=True,
+        metavar="HASH",
+        help="expected sha256 of the asset; a mismatch fails the drill",
+    )
+    recovery_drill.add_argument("--vault", type=Path, required=True, help="vault file to create")
+    recovery_drill.add_argument(
+        "--journal",
+        type=Path,
+        help="write-ahead journal path (default: <vault>.drill-journal)",
+    )
+    recovery_drill.add_argument(
+        "--last-resort",
+        required=True,
+        help="the stated last-resort recovery path (e.g. EDL entry point or service-only)",
+    )
+    recovery_drill.add_argument(
+        "--simulate",
+        type=Path,
+        required=True,
+        metavar="TRANSCRIPT",
+        help="transcript to replay for the restore write; the only permitted target",
+    )
+    recovery_drill.add_argument(
+        "--staging-dir",
+        type=Path,
+        help="directory for decrypted image staging (default: beside the vault)",
+    )
+    recovery_drill.add_argument(
+        "--other-serial-sha256",
+        required=True,
+        metavar="HASH",
+        help="serial hash of a DIFFERENT device; the drill must refuse it",
+    )
+    recovery_drill.add_argument(
+        "--other-fingerprint",
+        required=True,
+        metavar="HASH",
+        help="fingerprint hash of a DIFFERENT device; the drill must refuse it",
+    )
+    _add_vault_device_args(recovery_drill)
 
     approval = subparsers.add_parser(
         "approval",
@@ -852,6 +1013,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "execute":
         return _run_execute(args)
+
+    if args.command == "recovery":
+        return _run_recovery(args)
 
     if args.command == "approval":
         return _run_approval(args)
@@ -1415,6 +1579,256 @@ def _print_execute_result(result: ExecuteResult) -> None:
         print("result: COMPLETE (V1 simulated writes; every step was executed and replayed)")
     else:
         print(f"result: STOPPED at step {result.aborted_step}")
+
+
+def _recovery_passphrase(args: argparse.Namespace, command: str) -> str | None:
+    if args.passphrase_file is not None:
+        try:
+            passphrase = args.passphrase_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"{command}: cannot read passphrase file: {exc}", file=sys.stderr)
+            return None
+        if not passphrase:
+            print(f"{command}: passphrase file is empty", file=sys.stderr)
+            return None
+        return str(passphrase)
+    passphrase = os.environ.get("CAIRN_VAULT_PASSPHRASE", "")
+    if not passphrase:
+        print(
+            f"{command}: no passphrase; pass --passphrase-file or set CAIRN_VAULT_PASSPHRASE",
+            file=sys.stderr,
+        )
+        return None
+    return str(passphrase)
+
+
+def _vault_device(args: argparse.Namespace, command: str) -> VaultDevice | None:
+    try:
+        return VaultDevice(
+            product=args.product,
+            serial_sha256=args.serial_sha256,
+            fingerprint_sha256=args.device_fingerprint,
+        )
+    except VaultError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+
+
+def _run_recovery(args: argparse.Namespace) -> int:
+    command = "cairn recovery"
+    subcommand = getattr(args, "recovery_command", None)
+    if subcommand == "backup":
+        return _recovery_backup(args, command)
+    if subcommand == "verify":
+        return _recovery_verify(args, command)
+    if subcommand == "restore":
+        return _recovery_restore(args, command)
+    if subcommand == "drill":
+        return _recovery_drill(args, command)
+    print(f"{command}: choose backup, verify, restore, or drill", file=sys.stderr)
+    return EXIT_USAGE
+
+
+def _recovery_backup(args: argparse.Namespace, command: str) -> int:
+    passphrase = _recovery_passphrase(args, f"{command} backup")
+    if passphrase is None:
+        return EXIT_USAGE
+    device = _vault_device(args, f"{command} backup")
+    if device is None:
+        # A device identity the vault refuses to bind is a refused job, not a
+        # CLI usage error (VaultError maps to EXIT_FAILED elsewhere).
+        return EXIT_FAILED
+    try:
+        plaintext = args.asset.read_bytes()
+    except OSError as exc:
+        print(f"{command} backup: cannot read asset {args.asset}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        vault = create_vault(
+            device=device,
+            entries={args.partition: plaintext},
+            passphrase=passphrase,
+        )
+        save_vault(args.out, vault, passphrase=passphrase)
+    except VaultError as exc:
+        print(f"{command} backup: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    payload = {
+        "vault": str(args.out),
+        "partition": args.partition,
+        "sha256": hashlib.sha256(plaintext).hexdigest(),
+        "device": device.to_dict(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"vault: {args.out}")
+        print(f"partition: {args.partition} ({len(plaintext)} bytes, encrypted)")
+        print(f"bound to: {device.product} (serial hash {device.serial_sha256[:12]}…)")
+        print("restore is refused for any other device identity; this is never overridable")
+    return EXIT_OK
+
+
+def _recovery_verify(args: argparse.Namespace, command: str) -> int:
+    passphrase = _recovery_passphrase(args, f"{command} verify")
+    if passphrase is None:
+        return EXIT_USAGE
+    try:
+        vault = load_vault(args.vault, passphrase=passphrase)
+    except VaultTamperedError as exc:
+        print(f"{command} verify: TAMPERED: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    except VaultError as exc:
+        print(f"{command} verify: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    payload = {
+        "vault": str(args.vault),
+        "mac_verified": True,
+        "partitions": list(vault.partitions),
+        "device": vault.device.to_dict(),
+        "created_at": vault.created_at.astimezone(UTC).isoformat(),
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"vault: {args.vault}")
+        print(f"MAC verified; partitions: {', '.join(vault.partitions)}")
+        print(f"bound to: {vault.device.product} (serial hash {vault.device.serial_sha256[:12]}…)")
+    return EXIT_OK
+
+
+def _recovery_restore(args: argparse.Namespace, command: str) -> int:
+    passphrase = _recovery_passphrase(args, f"{command} restore")
+    if passphrase is None:
+        return EXIT_USAGE
+    device = _vault_device(args, f"{command} restore")
+    if device is None:
+        return EXIT_FAILED
+    try:
+        vault = load_vault(args.vault, passphrase=passphrase)
+    except VaultTamperedError as exc:
+        print(f"{command} restore: TAMPERED: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    except VaultError as exc:
+        print(f"{command} restore: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        restore_check(vault, device)
+    except VaultDeviceMismatch as exc:
+        print(f"{command} restore: REFUSED: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    if vault.entry(args.partition) is None:
+        print(
+            f"{command} restore: vault has no entry for partition {args.partition!r}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    try:
+        plaintext = decrypt_entry(vault, args.partition, passphrase=passphrase)
+    except VaultError as exc:
+        print(f"{command} restore: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    prepared = prepare_fastboot(fastboot=None, simulate=args.simulate)
+    try:
+        transport = SimulatedFastbootTransport.from_prepared(prepared)
+    except ExecutorRefused as exc:
+        print(f"{command} restore: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+    step = PlanStep(number=1, action=PlanAction.FLASH, source_line=0, partition=args.partition)
+    staging = (
+        args.staging_dir
+        if args.staging_dir is not None
+        else Path(tempfile.mkdtemp(prefix="cairn-recovery-"))
+    )
+    try:
+        staging.mkdir(parents=True, exist_ok=True)
+        staged = staging / f"restore-{args.partition}.img"
+        staged.write_bytes(plaintext)
+        result = transport.run_write(step, image_path=staged, timeout_s=600.0)
+    except (ToolError, OSError) as exc:
+        print(f"{command} restore: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    payload = {
+        "vault": str(args.vault),
+        "partition": args.partition,
+        "device": device.to_dict(),
+        "simulated": True,
+        "exit_code": result.exit_code,
+        "ok": result.ok,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print("restore: SIMULATED (not device evidence)")
+        print(f"partition {args.partition} written in the simulator: exit {result.exit_code}")
+        print("the vault refused any other device identity before this write")
+    return EXIT_OK if result.ok else EXIT_FAILED
+
+
+def _recovery_drill(args: argparse.Namespace, command: str) -> int:
+    passphrase = _recovery_passphrase(args, f"{command} drill")
+    if passphrase is None:
+        return EXIT_USAGE
+    device = _vault_device(args, f"{command} drill")
+    if device is None:
+        return EXIT_FAILED
+    try:
+        other = VaultDevice(
+            product=f"{args.product}-other",
+            serial_sha256=args.other_serial_sha256,
+            fingerprint_sha256=args.other_fingerprint,
+        )
+    except VaultError as exc:
+        print(f"{command} drill: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    journal = args.journal if args.journal is not None else Path(f"{args.vault}.drill-journal")
+    staging = (
+        args.staging_dir if args.staging_dir is not None else args.vault.parent / "drill-staging"
+    )
+    inputs = DrillInputs(
+        partition=args.partition,
+        asset_path=args.asset,
+        asset_sha256=args.expected_sha256,
+        device=device,
+        other_device=other,
+        vault_path=args.vault,
+        staging_dir=staging,
+        passphrase=passphrase,
+        journal_path=journal,
+        last_resort_path=args.last_resort,
+    )
+    # The drill's restore write is simulator-only by construction: the transport
+    # refuses any real fastboot binary (ADR-027).
+    prepared = prepare_fastboot(fastboot=None, simulate=args.simulate)
+    try:
+        transport = SimulatedFastbootTransport.from_prepared(prepared)
+    except ExecutorRefused as exc:
+        print(f"{command} drill: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+    try:
+        report = run_drill(inputs, transport, now=datetime.now(UTC))
+    except (DrillError, VaultError) as exc:
+        print(f"{command} drill: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        _print_drill_report(report)
+    if report.verdict is Tri.TRUE:
+        return EXIT_OK
+    return EXIT_FAILED if report.verdict is Tri.FALSE else EXIT_UNKNOWN
+
+
+def _print_drill_report(report: DrillReport) -> None:
+    print("recovery drill: SIMULATED (not device evidence; not the M6 gate itself)")
+    for step in report.steps:
+        print(f"  {step.name:<22} {step.state.name:<8} {step.detail}")
+    print(
+        f"result: {'PASS' if report.verdict is Tri.TRUE else report.verdict.name} "
+        f"(same-device restore: {report.same_device_restored}, "
+        f"cross-device refused: {report.cross_device_refused})"
+    )
 
 
 def _parse_chain(specs: list[str], command: str) -> dict[str, Path] | None:

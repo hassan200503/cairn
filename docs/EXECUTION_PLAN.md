@@ -308,6 +308,20 @@ vault design, restore-only-same-device rule, recovery drill script.
 **Accept:** external review signs off; a drill restores a backed-up partition to the
 same device and refuses another device; no real write before this gate.
 **Depends on:** T06, T14.
+**Status:** partial (2026-11-27). The threat model
+(`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset verification and readiness
+check, the encrypted device-bound vault (domain-separated HMAC-SHA256 key
+derivation, HMAC-SHA256-CTR encryption, encrypt-then-MAC over the canonical
+document, plaintext sha256 re-verification on decrypt, unsafe partition names
+refused), the restore-only-same-device rule (`VaultDeviceMismatch`, never
+overridable), and the `cairn recovery backup|verify|restore|drill` CLI landed
+(ADR-028). The drill proves the same-device round trip and the cross-device
+refusal through the journaled transcript simulator only (`tests/test_recovery.py`,
+`tests/test_cli_recovery.py`); real fastboot is refused per ADR-027. Pending: the
+external crypto review of the vault and external safety review of the drill
+(KU-032) — the drill passing is necessary, not sufficient, for the M6 gate — plus
+real scrubbed transcripts, hardware findings, and the Virtual A/B / dynamic
+partition state machines.
 
 ---
 

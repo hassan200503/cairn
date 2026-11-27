@@ -89,17 +89,19 @@ Update the relevant doc in the same change:
 
 - The canonical snapshot is `docs/STATE.md`; read it first and update it in the
   same commit as any change to what is implemented.
-- All commands are read-only. No real-device writes; the M6 gate and recovery
-  drill still come first.
+- All commands are read-only on real devices. The only write paths are the
+  transcript simulator (`cairn execute`, `cairn recovery restore|drill`), and
+  every write is labelled `SIMULATED` (ADR-027, ADR-028).
 - The AVB parser, signature and chain checks, contextual expected-key check,
   Rollback Oracle v0, vendor-specific device stored-index reader, safety engine,
   planner, package inspection, hash index, Host Doctor, sparse validation,
-  simulator, preflight wizard, approval binding, and the simulator-gated executor
-  with its write-ahead journal have landed in slices. `cairn plan` safety-gates its
-  structural dry run and refuses FALSE or UNKNOWN rules; `cairn execute` runs an
-  approved plan end to end in the fastboot simulator only (ADR-027). A device-bound
-  lock/key anchor and the catalog-bound preflight inputs remain unknown; T15 (the
-  Recovery Kit and M6 gate) comes before any real-device write transport.
+  simulator, preflight wizard, approval binding, the simulator-gated executor
+  with its write-ahead journal, and the recovery kit (encrypted device-bound
+  vault, SR-008/SR-009, M6 drill) have landed in slices. `cairn plan` safety-gates
+  its structural dry run and refuses FALSE or UNKNOWN rules; `cairn execute` runs
+  an approved plan end to end in the fastboot simulator only (ADR-027). The
+  external crypto/safety review of the vault (KU-032) must land before any
+  real-device write transport exists.
 
 ## Definition of done
 

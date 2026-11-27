@@ -10,8 +10,9 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the simulator-gated executor and write-ahead
-journal slice (T14, ADR-027).
+**Last updated:** 2026-11-27, after the recovery kit and M6 drill slice (T15,
+ADR-028). The vault and drill are simulator-only and externally unreviewed
+(KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -71,15 +72,17 @@ src/cairn/
   sim/           transcript schema, recorder/replayer, fault-injecting fastboot simulator
   wizard/        resumable read-only preflight stages, strict session persistence, rendering
   executor/      simulator-gated plan executor, hash-chained write-ahead journal
+  recovery/      encrypted device-bound vault, SR-008/SR-009 asset checks, M6 drill
 ```
 
 Design notes, in the order the reader should meet them:
 
-- **No command writes to a real device.** The only write-capable code path is the
-  transcript simulator (`cairn.executor`, `cairn execute`), and every execution is
-  labelled `SIMULATED`, never device evidence. A real fastboot binary is refused by
-  the transport (ADR-027). That is deliberate: the M6 gate and the recovery drill
-  (T15) come before a real-device write path exists.
+- **No command writes to a real device.** The only write-capable code paths are
+  the transcript simulator (`cairn.executor` via `cairn execute`, and
+  `cairn recovery restore|drill`), and every write is labelled `SIMULATED`, never
+  device evidence. Real fastboot binaries are refused by the transport (ADR-027).
+  That is deliberate: the M6 gate, its external reviews (KU-032), and the
+  recovery drill come before a real-device write path exists.
 - **Plans have two gates.** Structural planning proves only the vendor-order dry
   run is modeled; a separate SafetyReport must also allow proceeding. Missing
   evidence is shown as `UNKNOWN` and blocks rather than becoming a pass.
@@ -118,6 +121,10 @@ Design notes, in the order the reader should meet them:
 | `cairn rollback read [--fastboot PATH] [--serial SERIAL] [--simulate TRANSCRIPT]` | read vendor-reported stored rollback indexes with one read-only `getvar all` | 0 complete / 2 usage / 3 UNKNOWN |
 | `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device]` | compare package rollback counters with caller-supplied or device-read stored values | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn execute --state SESSION --simulate TRANSCRIPT --token TOKEN --key KEY (--nonce N --device-fingerprint HEX \| nothing for a probed session) [--journal PATH] [--staging-dir DIR]` | execute an approved, safety-gated plan in the transcript simulator only, with a write-ahead journal; real fastboot binaries are refused (ADR-027) | 0 complete / 1 failed / 2 usage / 3 blocked |
+| `cairn recovery backup --partition P --asset IMG --out VAULT --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F]` | encrypt a critical partition image into a device-bound vault; raw serials are never accepted, only their sha256 (ADR-028) | 0 / 1 refused / 2 usage |
+| `cairn recovery verify VAULT [--passphrase-file F]` | verify a vault's MAC and recorded plaintext hashes | 0 verified / 1 tampered or wrong passphrase |
+| `cairn recovery restore VAULT --partition P --simulate TRANSCRIPT [--journal PATH] [--staging-dir DIR] --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F]` | restore a vault entry to its bound device identity in the simulator only; any other identity is REFUSED, never overridable (ADR-027, ADR-028) | 0 / 1 refused or failed / 2 usage / 3 simulator refused |
+| `cairn recovery drill --partition P --asset IMG --expected-sha256 H --vault VAULT --last-resort TEXT --simulate TRANSCRIPT --other-serial-sha256 H --other-fingerprint H --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F] [--json]` | run the M6 drill: verify, back up, restore same-device, refuse cross-device; the report is labelled SIMULATED and is not device evidence | 0 drill TRUE / 1 drill FAILED / 2 usage |
 
 Exit code constants: `EXIT_OK=0`, `EXIT_FAILED=1`, `EXIT_USAGE=2`, `EXIT_UNKNOWN=3`.
 Every command supports `--json` where structured output makes sense.
@@ -341,15 +348,15 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 526 passed, 2 skipped
+uv run pytest -q               # 543 passed, 2 skipped
 ```
 
-The latest CI run is `45951665085` for `e358aea` on pull request
-[#1](https://github.com/hassan200503/cairn/pull/1) and is green: lint, format, and
-types; the AOSP libsparse sparse oracle; and tests on Ubuntu and Windows under
-Python 3.12 and 3.14. That run covers the AVB key-check slice (`58c03a8`) and the
-approval-binding slice (`e358aea`), neither of which had run in CI before. The
-501-test baseline above was confirmed locally on the same slice.
+The latest CI run is `46003349752` for the T14 executor slice merged through
+pull request [#2](https://github.com/hassan200503/cairn/pull/2) (merge `4cf91bc`)
+and is green: lint, format, and types; the AOSP libsparse sparse oracle; and
+tests on Ubuntu and Windows under Python 3.12 and 3.14. The recovery-kit slice
+(T15) postdates that run; its commit's CI run must be green before merge. The
+543-test baseline above was confirmed locally on the T15 slice.
 
 The two local skips are environmental, not gaps in coverage:
 
@@ -406,6 +413,10 @@ These are the reasons the remaining work cannot simply be "finished":
   safety rules, but it has only package provenance evidence; absent identity, AVB,
   rollback, tool, and lock/key facts remain UNKNOWN and it is therefore
   non-executable (KU-031).
+- **No external review of the recovery vault.** The vault crypto and the M6
+  drill have only this project's own review and tests; external sign-off is an
+  explicit T15 acceptance condition (KU-032), and no real-device write may
+  depend on the vault until it lands.
 - **No Pixel verifier oracle.** `pixel_factory_image_verify.py` has not been
   run against our output.
 - **EDL, MediaTek, and Samsung backends** are research-only; no hardware, no
@@ -447,10 +458,16 @@ push, confirm CI green.
    only; a real fastboot binary is refused. Remaining work: the real-device
    transport (blocked behind T15 and the M6 gate), slot/Virtual A/B state
    reconciliation, and a journal growth policy for very long plans.
-6. **T15 — Recovery Kit and the M6 gate.** Threat model, recovery asset
-   verification, encrypted device-bound vault design, restore-only-same-device
-   rule, and a recovery drill script. This is the gate that unlocks a real-device
-   transport.
+6. **T15 — Recovery Kit and the M6 gate (landed, simulator-only).** The threat
+   model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
+   readiness checks, the encrypted device-bound vault with
+   restore-only-same-device enforcement, and the `cairn recovery
+   backup|verify|restore|drill` CLI are in `cairn.recovery` (ADR-028). The drill
+   proves the same-device round trip and the cross-device refusal in the
+   simulator. Remaining work before the M6 gate opens a real-device transport:
+   external crypto review of the vault and external safety review of the drill
+   (KU-032), real scrubbed transcripts and hardware findings, and the Virtual
+   A/B / dynamic-partition state machines.
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session
