@@ -10,7 +10,8 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the read-only resumable wizard slice.
+**Last updated:** 2026-11-27, after the simulator-gated executor and write-ahead
+journal slice (T14, ADR-027).
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -69,13 +70,16 @@ src/cairn/
   safety/        safety rule engine and override policy
   sim/           transcript schema, recorder/replayer, fault-injecting fastboot simulator
   wizard/        resumable read-only preflight stages, strict session persistence, rendering
+  executor/      simulator-gated plan executor, hash-chained write-ahead journal
 ```
 
 Design notes, in the order the reader should meet them:
 
-- **Everything is read-only so far.** No command in this repository writes to a
-  device. `cairn plan` is a dry run. That is deliberate: the M6 gate and the
-  recovery drill (T15) come before any write path exists.
+- **No command writes to a real device.** The only write-capable code path is the
+  transcript simulator (`cairn.executor`, `cairn execute`), and every execution is
+  labelled `SIMULATED`, never device evidence. A real fastboot binary is refused by
+  the transport (ADR-027). That is deliberate: the M6 gate and the recovery drill
+  (T15) come before a real-device write path exists.
 - **Plans have two gates.** Structural planning proves only the vendor-order dry
   run is modeled; a separate SafetyReport must also allow proceeding. Missing
   evidence is shown as `UNKNOWN` and blocks rather than becoming a pass.
@@ -113,6 +117,7 @@ Design notes, in the order the reader should meet them:
 | `cairn avb key-check IMAGE [--key KEY] --lock-state STATE` | contextual expected-key check; inputs are caller-supplied, not device evidence | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn rollback read [--fastboot PATH] [--serial SERIAL] [--simulate TRANSCRIPT]` | read vendor-reported stored rollback indexes with one read-only `getvar all` | 0 complete / 2 usage / 3 UNKNOWN |
 | `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device]` | compare package rollback counters with caller-supplied or device-read stored values | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
+| `cairn execute --state SESSION --simulate TRANSCRIPT --token TOKEN --key KEY (--nonce N --device-fingerprint HEX \| nothing for a probed session) [--journal PATH] [--staging-dir DIR]` | execute an approved, safety-gated plan in the transcript simulator only, with a write-ahead journal; real fastboot binaries are refused (ADR-027) | 0 complete / 1 failed / 2 usage / 3 blocked |
 
 Exit code constants: `EXIT_OK=0`, `EXIT_FAILED=1`, `EXIT_USAGE=2`, `EXIT_UNKNOWN=3`.
 Every command supports `--json` where structured output makes sense.
@@ -206,6 +211,35 @@ can this package lower a rollback counter? The inequality is AOSP's
 - Chain images are parsed for counters, not signature-checked. SR-003 must pass
   separately before the counters are trusted.
 
+### Executor semantics
+
+`cairn.executor` is the first module with write verbs, and it cannot reach real
+hardware: the only transport that can issue flash/erase/reboot/update-super is
+`SimulatedFastbootTransport`, built exclusively from a transcript replay; a real
+fastboot binary raises `EXECUTOR_REFUSED` (ADR-027). `cairn execute` therefore runs
+approved plans end to end with every output labelled `SIMULATED`, never device
+evidence, and the result verdict is at most `TRUE` for "the simulation completed".
+
+- **Gates.** Plan hash must verify and the plan must be executable; the safety
+  verdict must not be FALSE (FALSE is never overridable); the approval token must
+  verify TRUE against the reloaded plan, package, entry hashes, and device binding.
+  UNKNOWN safety verdicts execute only because the transport is the simulator.
+- **TOCTOU guard.** Every flashed image is extracted from the package and re-hashed
+  against the approval bundle immediately before staging; a byte mismatch refuses
+  the run and deletes the staged file.
+- **Journal.** Append-only JSONL, one fsync per record, SHA-256 hash chain from a
+  genesis record. Loading tolerates a torn final line (reported, then truncated on
+  resume) and refuses mid-chain corruption. The journal is tamper-evident, not
+  tamper-proof.
+- **Idempotency and resume.** FLASH, ERASE, and UPDATE-SUPER are idempotent and are
+  re-run when found STARTED without DONE. REBOOT is non-idempotent: an interrupted
+  reboot aborts the resume with the plan's stop-and-reprobe fallback and requires a
+  fresh preflight, because a reboot invalidates pre-reboot evidence. A step recorded
+  as FAILED is never retried automatically.
+- **Crash harness.** `tests/test_executor.py` kills execution after every journal
+  record and proves each resume reaches exactly the uninterrupted final device
+  state; the interrupted-reboot point must abort, not complete.
+
 ---
 
 ## 6. What is deliberately not claimed
@@ -236,6 +270,8 @@ These statements are enforced in code and in output text. Do not weaken them.
   debuggable, unlocked devices. The tool says so instead of pretending otherwise.
 - `UNKNOWN` is a block, not a soft warning. Overrides never convert `UNKNOWN`
   into `TRUE`.
+- An executor run is `SIMULATED` by construction and never device evidence; a
+  completed simulation is not a flashed device (ADR-027).
 
 ---
 
@@ -305,7 +341,7 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 506 passed, 2 skipped
+uv run pytest -q               # 526 passed, 2 skipped
 ```
 
 The latest CI run is `45951665085` for `e358aea` on pull request
@@ -400,15 +436,21 @@ push, confirm CI green.
    identities, and enforce the result as rule SR-018. The binding is canonical JSON
    hashed to `binding_sha256` and HMAC-SHA256 signed under a per-session consistency
    key; any byte change in any bound input invalidates it. It is a consistency
-   boundary, not an authorization boundary (ADR-014, ADR-025). Remaining work is
-   mutation and TOCTOU tests and CLI-to-safety-engine wiring inside the executor.
-5. **T14 — Journal and executor.** Write-ahead journal, idempotency classes,
-   reconciliation, and a crash harness that kills at every journal point. This
-   is the first slice that may write, and it is still gated behind simulator
-   execution until T15 completes.
+   boundary, not an authorization boundary (ADR-014, ADR-025). The executor now
+   enforces the token as a hard gate and re-verifies every staged image against the
+   bound entry hashes at execution time (ADR-027). Remaining work is mutation
+   testing of the binding and the safety rules.
+5. **T14 — Journal and executor (landed, simulator-gated).** The hash-chained
+   write-ahead journal, idempotency classes, reconcile-on-resume, and the
+   crash-at-every-journal-point harness are in `cairn.executor`, wired to the CLI as
+   `cairn execute` (ADR-027). Every write verb reaches the transcript simulator
+   only; a real fastboot binary is refused. Remaining work: the real-device
+   transport (blocked behind T15 and the M6 gate), slot/Virtual A/B state
+   reconciliation, and a journal growth policy for very long plans.
 6. **T15 — Recovery Kit and the M6 gate.** Threat model, recovery asset
    verification, encrypted device-bound vault design, restore-only-same-device
-   rule, and a recovery drill script.
+   rule, and a recovery drill script. This is the gate that unlocks a real-device
+   transport.
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session

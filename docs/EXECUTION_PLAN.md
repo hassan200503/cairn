@@ -284,6 +284,22 @@ that kills at every journal point.
 **Accept:** crash at every point is classified; resume reaches the same final state
 in simulator; no non-idempotent op is re-run blindly.
 **Depends on:** T13.
+**Status:** partial (2026-11-27). `cairn.executor` lands the append-only,
+hash-chained, fsync-per-record JSONL write-ahead journal (torn tails are detected
+and truncated on resume; mid-chain corruption refuses the journal) and the
+simulator-gated plan executor behind three fail-closed gates: plan hash plus
+executability, the pre-approval safety verdict (FALSE refuses always; UNKNOWN is
+executable only in the simulator and the run stays labelled `SIMULATED`), and a
+verified approval token over plan, package, entry hashes, and device binding
+(SR-018). Every flashed image is re-extracted and re-hashed against the approval
+bundle before staging. Idempotency classes: flash/erase/update-super may re-run on
+resume; an interrupted reboot aborts with stop-and-reprobe and demands a fresh
+preflight; a previously failed step is never retried. The crash harness kills
+execution after every journal record and proves each resume reaches the exact
+uninterrupted final state (`tests/test_executor.py`); `cairn execute` wires this to
+the CLI and refuses real fastboot binaries (`ADR-027`). Pending: the real-device
+transport behind T15 and the M6 gate, a Virtual A/B/slot-aware state machine, and
+journal growth/rotation policy for very long plans.
 
 ### T15 - Recovery Kit, Vault design review, M6 gate
 

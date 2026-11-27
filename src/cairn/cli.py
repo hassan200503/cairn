@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from cairn import __version__
 from cairn.adapters.fastboot import FastbootClient, ProbedFact, ProbeResult
+from cairn.adapters.prepare import prepare_fastboot
 from cairn.approval import (
     MAX_TOKEN_BYTES,
     ApprovalError,
@@ -38,6 +40,17 @@ from cairn.core.errors import ToolError
 from cairn.core.evidence import EvidenceSource
 from cairn.core.tristate import Tri
 from cairn.core.verification import VerificationLevel
+from cairn.executor import (
+    DEFAULT_STEP_TIMEOUT_S,
+    ExecuteResult,
+    ExecutionRequest,
+    ExecutorRefused,
+    JournalCorruptError,
+    JournalWriteError,
+    SafetyGate,
+    SimulatedFastbootTransport,
+    execute_plan,
+)
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor, HostReport
 from cairn.package.archive import PackageError, PackageManifest, load_package
 from cairn.plan.planner import (
@@ -398,6 +411,76 @@ def build_parser() -> argparse.ArgumentParser:
         help="approval key file (requires --approval)",
     )
     wizard.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
+    execute = subparsers.add_parser(
+        "execute",
+        help="execute an approved plan in the transcript simulator only",
+        description=(
+            "Run an approved, safety-gated plan against the fastboot transcript "
+            "simulator with a write-ahead journal. Real-device writes are refused "
+            "until the recovery kit and the M6 gate land."
+        ),
+    )
+    execute.add_argument(
+        "--state",
+        type=Path,
+        required=True,
+        help="wizard session JSON path recorded by `cairn wizard`",
+    )
+    execute.add_argument(
+        "--simulate",
+        type=Path,
+        required=True,
+        metavar="TRANSCRIPT",
+        help="transcript to replay; this is the only permitted execution target",
+    )
+    execute.add_argument(
+        "--token",
+        type=Path,
+        required=True,
+        metavar="TOKEN",
+        help="approval token",
+    )
+    execute.add_argument(
+        "--key",
+        type=Path,
+        required=True,
+        metavar="KEY",
+        help="approval consistency key file used to sign --token",
+    )
+    execute.add_argument(
+        "--nonce",
+        help=(
+            "device nonce used when the token was issued "
+            "(required when the session has no probed binding)"
+        ),
+    )
+    execute.add_argument(
+        "--device-fingerprint",
+        help="caller 64-hex fingerprint used when the token was issued",
+    )
+    execute.add_argument(
+        "--journal",
+        type=Path,
+        help="write-ahead journal path (default: <state>.journal)",
+    )
+    execute.add_argument(
+        "--staging-dir",
+        type=Path,
+        help="directory for hash-verified image staging (default: a fresh temporary directory)",
+    )
+    execute.add_argument(
+        "--timeout-s",
+        type=float,
+        default=DEFAULT_STEP_TIMEOUT_S,
+        metavar="S",
+        help=f"per-step timeout in seconds (default {DEFAULT_STEP_TIMEOUT_S:g})",
+    )
+    execute.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -766,6 +849,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "wizard":
         return _run_wizard(args)
+
+    if args.command == "execute":
+        return _run_execute(args)
 
     if args.command == "approval":
         return _run_approval(args)
@@ -1186,6 +1272,149 @@ def _run_wizard(args: argparse.Namespace) -> int:
     else:
         print(render_session(session))
     return session_exit_code(session)
+
+
+def _run_execute(args: argparse.Namespace) -> int:
+    command = "cairn execute"
+    if args.timeout_s <= 0:
+        print(f"{command}: --timeout-s must be positive", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        session = load_session(args.state)
+    except WizardError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    allowed = (SessionOutcome.READY, SessionOutcome.CLEARED, SessionOutcome.SIMULATED)
+    if session.outcome not in allowed:
+        print(
+            f"{command}: wizard session outcome is {session.outcome.value}; "
+            "execution requires READY, CLEARED, or SIMULATED",
+            file=sys.stderr,
+        )
+        return EXIT_UNKNOWN
+    if session.bundle is None or session.plan is None or session.pre_safety is None:
+        print(
+            f"{command}: wizard session has no plan or approval bundle to execute",
+            file=sys.stderr,
+        )
+        return EXIT_UNKNOWN
+    verdict_name = session.pre_safety.get("verdict")
+    if verdict_name not in {"TRUE", "FALSE", "UNKNOWN"}:
+        print(
+            f"{command}: wizard session pre-approval safety verdict is missing or invalid",
+            file=sys.stderr,
+        )
+        return EXIT_UNKNOWN
+    if verdict_name == "FALSE":
+        print(
+            f"{command}: the session's safety verdict is FALSE and is never overridable",
+            file=sys.stderr,
+        )
+        return EXIT_UNKNOWN
+
+    try:
+        reloaded = reload_session_plan(session)
+    except WizardError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    binding = None
+    if session.device is not None:
+        candidate = session.device.binding()
+        if candidate is not None and candidate.source.value == "probed":
+            binding = candidate
+    if binding is None:
+        if args.nonce is None or args.device_fingerprint is None:
+            print(
+                f"{command}: the session has no probed device binding; pass --nonce and "
+                "--device-fingerprint exactly as used at issue time",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        binding = _caller_binding(args.nonce, args.device_fingerprint, command)
+        if binding is None:
+            return EXIT_USAGE
+
+    try:
+        key = load_approval_key(args.key)
+        token_text = _read_token_text(args.token)
+    except ApprovalError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    current = ApprovalInputs(
+        plan_sha256=session.bundle.plan_sha256,
+        evidence_snapshot_sha256=session.bundle.evidence_snapshot_sha256,
+        archive_sha256=session.bundle.archive_sha256,
+        package_hashes=session.bundle.package_hashes,
+        device=binding,
+        tools=session.bundle.tools,
+    )
+    approval = verify_approval(token_text, key, current)
+    if approval.state is not Tri.TRUE:
+        if args.json:
+            print(json.dumps({"approval": approval.to_dict()}, indent=2))
+        else:
+            for reason in approval.reasons:
+                print(f"{command}: approval: {reason}", file=sys.stderr)
+        return EXIT_FAILED if approval.state is Tri.FALSE else EXIT_UNKNOWN
+
+    prepared = prepare_fastboot(fastboot=None, simulate=args.simulate)
+    try:
+        transport = SimulatedFastbootTransport.from_prepared(prepared)
+    except ExecutorRefused as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+
+    blocking_raw = session.pre_safety.get("blocking")
+    blocking = tuple(blocking_raw) if isinstance(blocking_raw, list) else ()
+    safety = SafetyGate(verdict=Tri[str(verdict_name)], blocking=blocking)
+    journal_path = args.journal if args.journal is not None else Path(f"{args.state}.journal")
+    staging_dir = (
+        args.staging_dir
+        if args.staging_dir is not None
+        else Path(tempfile.mkdtemp(prefix="cairn-stage-"))
+    )
+    request = ExecutionRequest(
+        plan=reloaded.plan,
+        package_path=Path(session.package_path),
+        expected_entry_hashes=dict(session.bundle.package_hashes),
+        safety=safety,
+        approval=approval,
+        transport=transport,
+        staging_dir=staging_dir,
+        timeout_s=args.timeout_s,
+    )
+    try:
+        result = execute_plan(request, journal_path)
+    except ExecutorRefused as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return EXIT_UNKNOWN
+    except (JournalWriteError, JournalCorruptError) as exc:
+        print(f"{command}: journal: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        _print_execute_result(result)
+    if result.verdict is Tri.TRUE:
+        return EXIT_OK
+    return EXIT_FAILED if result.verdict is Tri.FALSE else EXIT_UNKNOWN
+
+
+def _print_execute_result(result: ExecuteResult) -> None:
+    label = "SIMULATED" if result.simulated else "REAL"
+    print(f"execution: {label} (not device evidence)" if result.simulated else "execution: real")
+    for step in result.steps:
+        suffix = f" exit={step.exit_code}" if step.exit_code is not None else ""
+        print(f"  step {step.number} {step.action:<13} {step.state:<8} {step.detail}{suffix}")
+    print(result.reason)
+    if result.completed:
+        print("result: COMPLETE (V1 simulated writes; every step was executed and replayed)")
+    else:
+        print(f"result: STOPPED at step {result.aborted_step}")
 
 
 def _parse_chain(specs: list[str], command: str) -> dict[str, Path] | None:
