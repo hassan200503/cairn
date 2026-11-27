@@ -409,6 +409,13 @@ def test_verify_is_false_when_the_evidence_snapshot_changed() -> None:
     assert "evidence_snapshot_sha256" in verdict.mismatches
 
 
+def test_verify_is_false_when_the_archive_hash_changed() -> None:
+    text, _, key = _issued()
+    verdict = verify_approval(text, key, _inputs(archive_sha256=_hex("archive2")))
+    assert verdict.state is Tri.FALSE
+    assert "archive_sha256" in verdict.mismatches
+
+
 def test_verify_is_false_when_a_package_entry_changed() -> None:
     text, _, key = _issued()
     changed = _inputs(package_hashes=(("boot.img", _hex("boot")), ("vendor.img", _hex("changed"))))

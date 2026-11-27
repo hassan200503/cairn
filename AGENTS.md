@@ -108,7 +108,8 @@ Update the relevant doc in the same change:
   real-device write transport exists.
 
 - Testing duty: run `python tools/mutation_check.py` after any change to
-  safety-rule logic; every rule must keep three suite-killed mutants.
+  safety-rule or approval-binding logic; every rule and every binding check
+  must keep its suite-killed mutants.
 
 ## Definition of done
 

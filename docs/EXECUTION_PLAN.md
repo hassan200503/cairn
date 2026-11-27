@@ -394,6 +394,24 @@ registration site, and restores the engine byte-exactly in all paths. Run it
 after any change to rule logic; it is not in the default CI loop (roughly three
 minutes). Approval-binding mutation tests remain separate future work.
 
+### T20 - Approval-binding mutation tests
+
+**Deliverable:** mutation tests over the approval token, binding, and device
+fingerprint code, run by the same harness.
+**Accept:** skipping any bound-field comparison, the MAC, the binding-hash or
+key-id check, or dropping a fingerprint fact is killed by the suite; the harness
+leaves sources byte-identical.
+**Depends on:** T13, T19.
+**Status:** landed (2026-11-27). The harness gained an `approval` mutant family:
+field-comparison removals (plan, evidence snapshot, archive, device, package
+hashes, tools), a verdict-flip on parse failure, neutered mismatch/signature/
+binding-hash/key-id checks, a dropped `binding_payload` field, disabled hex64
+validation, a dropped required fingerprint fact, and stale required facts
+accepted. The first run exposed a real gap — no test pinned the
+`archive_sha256` comparison — which `test_verify_is_false_when_the_archive_hash_changed`
+now kills. Recorded run: **48/48 mutants killed** (33 rule mutants + 15
+approval mutants).
+
 ---
 
 ## 5. Release gates
