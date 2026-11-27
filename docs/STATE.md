@@ -305,9 +305,12 @@ uv run mypy src                # clean
 uv run pytest -q               # 501 passed, 2 skipped
 ```
 
-The latest CI run for a pushed commit is `45819113387` for `9ff02bf` and is
-green. The 501-test baseline above was confirmed locally after the approval-binding
-slice; CI has not run the slices after `9ff02bf` yet.
+The latest CI run is `45951665085` for `e358aea` on pull request
+[#1](https://github.com/hassan200503/cairn/pull/1) and is green: lint, format, and
+types; the AOSP libsparse sparse oracle; and tests on Ubuntu and Windows under
+Python 3.12 and 3.14. That run covers the AVB key-check slice (`58c03a8`) and the
+approval-binding slice (`e358aea`), neither of which had run in CI before. The
+501-test baseline above was confirmed locally on the same slice.
 
 The two local skips are environmental, not gaps in coverage:
 
