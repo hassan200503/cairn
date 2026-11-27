@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from cairn.safety.engine import (
     DEFAULT_RULES,
+    PRE_APPROVAL_RULES,
     CheckState,
     DeviceIdentity,
     OverrideRecord,
@@ -21,6 +22,7 @@ from cairn.safety.engine import (
 
 __all__: Sequence[str] = (
     "DEFAULT_RULES",
+    "PRE_APPROVAL_RULES",
     "CheckState",
     "DeviceIdentity",
     "OverrideRecord",

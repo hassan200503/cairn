@@ -3,16 +3,37 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from cairn import __version__
 from cairn.adapters.fastboot import FastbootClient, ProbedFact, ProbeResult
+from cairn.approval import (
+    MAX_TOKEN_BYTES,
+    ApprovalError,
+    ApprovalInputs,
+    ApprovalToken,
+    ApprovalVerdict,
+    DeviceBinding,
+    ToolBinding,
+    build_device_binding,
+    caller_device_binding,
+    device_fingerprint,
+    generate_approval_key,
+    issue_approval,
+    key_id,
+    load_approval_key,
+    parse_approval_token,
+    verify_approval,
+    write_approval_key,
+)
 from cairn.core.errors import ToolError
 from cairn.core.evidence import EvidenceSource
 from cairn.core.tristate import Tri
@@ -69,6 +90,25 @@ EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_UNKNOWN = 3
+
+
+def _add_plan_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--wipe",
+        action="store_true",
+        help="include vendor if-wipe commands",
+    )
+    parser.add_argument(
+        "--slot",
+        choices=[policy.value for policy in SlotPolicy],
+        default=SlotPolicy.CURRENT.value,
+        help="slot policy",
+    )
+    parser.add_argument(
+        "--retrofit-force",
+        action="store_true",
+        help="request the unmodeled retrofit force case",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -211,6 +251,188 @@ def build_parser() -> argparse.ArgumentParser:
         help="request the unmodeled retrofit force case (plan will not be executable)",
     )
     plan.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+    plan.add_argument(
+        "--approval",
+        type=Path,
+        metavar="TOKEN",
+        help="signed approval token to verify before deciding",
+    )
+    plan.add_argument(
+        "--approval-key",
+        type=Path,
+        help="approval key file (requires --approval)",
+    )
+    plan.add_argument(
+        "--nonce",
+        help="session nonce, 32-128 lowercase hex (requires --approval)",
+    )
+    plan.add_argument(
+        "--device-fingerprint",
+        help="caller-supplied 64-hex device fingerprint (requires --approval)",
+    )
+    plan.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME=VERSION[@SHA256]",
+        help="tool identity bound in the approval; repeat as needed",
+    )
+
+    approval = subparsers.add_parser(
+        "approval",
+        help="issue and verify signed approval bindings (no device writes)",
+    )
+    approval_sub = approval.add_subparsers(
+        dest="approval_command",
+        metavar="subcommand",
+    )
+    approval_keygen = approval_sub.add_parser(
+        "keygen",
+        help="generate a 32-byte approval consistency key",
+    )
+    approval_keygen.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="key file to create",
+    )
+    approval_keygen.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an existing key file",
+    )
+    approval_keygen.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
+    approval_inspect = approval_sub.add_parser(
+        "inspect",
+        help="verify and print a signed approval token",
+    )
+    approval_inspect.add_argument("token", type=Path, help="approval token JSON")
+    approval_inspect.add_argument(
+        "--key",
+        type=Path,
+        required=True,
+        help="approval key file",
+    )
+    approval_inspect.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
+    approval_issue = approval_sub.add_parser(
+        "issue",
+        help="issue a token after the pre-approval safety report passes",
+    )
+    approval_issue.add_argument("package", type=Path, help="factory or OTA zip")
+    approval_issue.add_argument(
+        "--index",
+        type=Path,
+        required=True,
+        help="local hash-index JSON",
+    )
+    approval_issue.add_argument(
+        "--key",
+        type=Path,
+        required=True,
+        help="approval key file",
+    )
+    approval_issue.add_argument(
+        "--operator",
+        required=True,
+        help="operator name recorded in the token",
+    )
+    approval_issue.add_argument(
+        "--reason",
+        required=True,
+        help="typed reason, at least 10 characters",
+    )
+    approval_issue.add_argument(
+        "--nonce",
+        required=True,
+        help="session nonce, 32-128 lowercase hex",
+    )
+    issue_source = approval_issue.add_mutually_exclusive_group(required=True)
+    issue_source.add_argument(
+        "--device-fingerprint",
+        help="caller-supplied 64-hex fingerprint; weaker than a probe",
+    )
+    issue_source.add_argument(
+        "--fastboot",
+        type=Path,
+        help="probe the device with official fastboot",
+    )
+    approval_issue.add_argument("--serial", help="target device serial with --fastboot")
+    approval_issue.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME=VERSION[@SHA256]",
+        help="bind another tool identity; repeat as needed",
+    )
+    _add_plan_options(approval_issue)
+    approval_issue.add_argument(
+        "--out",
+        type=Path,
+        help="write the token here; omit for stdout",
+    )
+    approval_issue.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
+    approval_verify = approval_sub.add_parser(
+        "verify",
+        help="verify a token against the current plan and evidence",
+    )
+    approval_verify.add_argument("token", type=Path, help="approval token JSON")
+    approval_verify.add_argument("package", type=Path, help="factory or OTA zip")
+    approval_verify.add_argument(
+        "--index",
+        type=Path,
+        required=True,
+        help="local hash-index JSON",
+    )
+    approval_verify.add_argument(
+        "--key",
+        type=Path,
+        required=True,
+        help="approval key file",
+    )
+    approval_verify.add_argument(
+        "--nonce",
+        required=True,
+        help="session nonce, 32-128 lowercase hex",
+    )
+    verify_source = approval_verify.add_mutually_exclusive_group(required=True)
+    verify_source.add_argument(
+        "--device-fingerprint",
+        help="caller-supplied 64-hex fingerprint; weaker than a probe",
+    )
+    verify_source.add_argument(
+        "--fastboot",
+        type=Path,
+        help="probe the device with official fastboot",
+    )
+    approval_verify.add_argument("--serial", help="target device serial with --fastboot")
+    approval_verify.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME=VERSION[@SHA256]",
+        help="bind another tool identity; repeat as needed",
+    )
+    _add_plan_options(approval_verify)
+    approval_verify.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -415,6 +637,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "plan":
         return _run_plan(args)
 
+    if args.command == "approval":
+        return _run_approval(args)
+
     if args.command == "avb":
         return _run_avb(args)
 
@@ -501,6 +726,7 @@ def _run_probe(args: argparse.Namespace) -> int:
         source = EvidenceSource.INFERRED
         tool = {
             "kind": "simulated",
+            "name": "fastboot",
             "transcript": str(args.simulate),
             "manifest_ok": None,
             "simulated": True,
@@ -523,6 +749,7 @@ def _run_probe(args: argparse.Namespace) -> int:
         source = EvidenceSource.PROBED
         tool = {
             "kind": "fastboot",
+            "name": "fastboot",
             "path": str(report.path),
             "version": report.version,
             "sha256": report.sha256,
@@ -538,6 +765,12 @@ def _run_probe(args: argparse.Namespace) -> int:
         expected_serial=args.serial,
         source=source,
     )
+    try:
+        fingerprint = device_fingerprint(result, now=datetime.now(UTC))
+        fingerprint_detail = "fingerprint of fresh PROBED identity facts"
+    except ApprovalError as exc:
+        fingerprint = None
+        fingerprint_detail = str(exc)
 
     payload = {
         "tool": tool,
@@ -547,6 +780,8 @@ def _run_probe(args: argparse.Namespace) -> int:
         "timed_out": result.timed_out,
         "cancelled": result.cancelled,
         "detail": result.detail,
+        "device_fingerprint": fingerprint,
+        "device_fingerprint_detail": fingerprint_detail,
         "facts": [_fact_payload(fact) for fact in result.facts],
     }
 
@@ -671,6 +906,32 @@ def _print_provenance(
 
 
 def _run_plan(args: argparse.Namespace) -> int:
+    approval_requested = args.approval is not None
+    if approval_requested and (
+        args.approval_key is None or args.nonce is None or args.device_fingerprint is None
+    ):
+        print(
+            "cairn plan: --approval requires --approval-key, --nonce, and --device-fingerprint",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if not approval_requested and (
+        args.approval_key is not None
+        or args.nonce is not None
+        or args.device_fingerprint is not None
+        or args.tool
+    ):
+        print(
+            "cairn plan: --approval-key, --nonce, --device-fingerprint, and --tool "
+            "require --approval",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    tools = _parse_tool_bindings(args.tool, "cairn plan")
+    if tools is None:
+        return EXIT_USAGE
+
     try:
         index = load_hash_index(args.index)
         manifest = load_package(
@@ -688,9 +949,37 @@ def _run_plan(args: argparse.Namespace) -> int:
                 retrofit_force=args.retrofit_force,
             ),
         )
-        safety = SafetyEngine().evaluate(SafetyContext(provenance=provenance))
+        pre_safety = SafetyEngine.pre_approval().evaluate(SafetyContext(provenance=provenance))
+        approval_check = None
+        if approval_requested:
+            device = _caller_binding(
+                args.nonce,
+                args.device_fingerprint,
+                "cairn plan",
+            )
+            if device is None:
+                return EXIT_USAGE
+            current = ApprovalInputs.from_manifest(
+                manifest,
+                plan,
+                pre_safety,
+                device,
+                tools=tools,
+            )
+            token_text = _read_token_text(args.approval)
+            key = load_approval_key(args.approval_key)
+            approval_check = verify_approval(
+                token_text,
+                key,
+                current,
+            ).to_check_state()
+        safety = SafetyEngine().evaluate(
+            SafetyContext(provenance=provenance, approval=approval_check)
+        )
+        if safety.evidence_snapshot_sha256 != pre_safety.evidence_snapshot_sha256:
+            raise PlanError("internal approval snapshot scope is inconsistent")
         assessment = assess_plan(plan, safety)
-    except (HashIndexError, PackageError, PlanError) as exc:
+    except (HashIndexError, PackageError, PlanError, ApprovalError) as exc:
         print(f"cairn plan: {exc}", file=sys.stderr)
         return EXIT_FAILED
 
@@ -699,6 +988,418 @@ def _run_plan(args: argparse.Namespace) -> int:
     else:
         _print_plan(assessment)
     return EXIT_OK if assessment.executable else EXIT_UNKNOWN
+
+
+def _run_approval(args: argparse.Namespace) -> int:
+    if args.approval_command == "keygen":
+        return _run_approval_keygen(args)
+    if args.approval_command == "inspect":
+        return _run_approval_inspect(args)
+    if args.approval_command == "issue":
+        return _run_approval_issue(args)
+    if args.approval_command == "verify":
+        return _run_approval_verify(args)
+    print(
+        "cairn approval: choose 'keygen', 'inspect', 'issue', or 'verify'",
+        file=sys.stderr,
+    )
+    return EXIT_USAGE
+
+
+def _run_approval_keygen(args: argparse.Namespace) -> int:
+    key = generate_approval_key()
+    try:
+        write_approval_key(args.out, key, overwrite=args.force)
+    except ApprovalError as exc:
+        print(f"cairn approval keygen: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    identifier = key_id(key)
+    payload = {"key": str(args.out), "key_id": identifier, "bytes": len(key)}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"approval key: {args.out}")
+        print(f"key id: {identifier}")
+        print("note: this is a per-session consistency key, not a security boundary")
+    return EXIT_OK
+
+
+def _run_approval_inspect(args: argparse.Namespace) -> int:
+    try:
+        key = load_approval_key(args.key)
+        token_text = _read_token_text(args.token)
+        token = parse_approval_token(token_text, key)
+    except ApprovalError as exc:
+        print(f"cairn approval inspect: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    token_sha256 = _text_sha256(token_text)
+    if args.json:
+        print(json.dumps(token.to_dict() | {"token_sha256": token_sha256}, indent=2))
+    else:
+        _print_approval_token(token, token_sha256)
+    return EXIT_OK
+
+
+def _run_approval_issue(args: argparse.Namespace) -> int:
+    tools = _parse_tool_bindings(args.tool, "cairn approval issue")
+    if tools is None:
+        return EXIT_USAGE
+    try:
+        key = load_approval_key(args.key)
+        index = load_hash_index(args.index)
+        manifest = load_package(
+            args.package,
+            hash_files=True,
+            hash_archive=True,
+        )
+        provenance = verify_manifest(index, manifest)
+        plan = build_plan(
+            manifest,
+            provenance,
+            options=PlanOptions(
+                wipe=args.wipe,
+                slot_policy=SlotPolicy(args.slot),
+                retrofit_force=args.retrofit_force,
+            ),
+        )
+        pre_safety = SafetyEngine.pre_approval().evaluate(SafetyContext(provenance=provenance))
+    except (ApprovalError, HashIndexError, PackageError, PlanError) as exc:
+        print(f"cairn approval issue: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if not plan.executable:
+        print(
+            "cairn approval issue: plan is not structurally executable; refusing to approve it",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+    if not pre_safety.can_proceed:
+        print(
+            "cairn approval issue: pre-approval safety report blocks: "
+            + ", ".join(pre_safety.blocking),
+            file=sys.stderr,
+        )
+        return EXIT_UNKNOWN
+
+    device, tool_binding, code = _approval_device(
+        args,
+        "cairn approval issue",
+        require_acceptable_tool=True,
+    )
+    if device is None:
+        return code
+    merged = _merge_tool_bindings(tools, tool_binding, "cairn approval issue")
+    if merged is None:
+        return EXIT_USAGE
+
+    try:
+        inputs = ApprovalInputs.from_manifest(
+            manifest,
+            plan,
+            pre_safety,
+            device,
+            tools=merged,
+        )
+        token = issue_approval(
+            inputs,
+            key,
+            operator=args.operator,
+            reason=args.reason,
+        )
+    except ApprovalError as exc:
+        print(f"cairn approval issue: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    token_text = token.to_json()
+    if args.out is None or str(args.out) == "-":
+        print(token_text, end="")
+        return EXIT_OK
+    try:
+        args.out.write_text(token_text, encoding="utf-8", newline="\n")
+    except OSError as exc:
+        print(
+            f"cairn approval issue: cannot write token {args.out}: {exc}",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+
+    payload = {
+        "token": str(args.out),
+        "token_sha256": _text_sha256(token_text),
+        "key_id": token.key_id,
+        "binding_sha256": token.binding_sha256,
+        "plan_sha256": token.inputs.plan_sha256,
+        "evidence_snapshot_sha256": token.inputs.evidence_snapshot_sha256,
+        "device_source": token.inputs.device.source.value,
+        "tools": [tool.to_dict() for tool in token.inputs.tools],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"approval token: {args.out}")
+        print(f"token sha256: {payload['token_sha256']}")
+        print(f"key id: {token.key_id}")
+        print(f"binding sha256: {token.binding_sha256}")
+        print(f"device source: {token.inputs.device.source.value}")
+        print("note: the token is a consistency boundary, not an authorization boundary")
+    return EXIT_OK
+
+
+def _run_approval_verify(args: argparse.Namespace) -> int:
+    tools = _parse_tool_bindings(args.tool, "cairn approval verify")
+    if tools is None:
+        return EXIT_USAGE
+    try:
+        key = load_approval_key(args.key)
+        token_text = _read_token_text(args.token)
+        index = load_hash_index(args.index)
+        manifest = load_package(
+            args.package,
+            hash_files=True,
+            hash_archive=True,
+        )
+        provenance = verify_manifest(index, manifest)
+        plan = build_plan(
+            manifest,
+            provenance,
+            options=PlanOptions(
+                wipe=args.wipe,
+                slot_policy=SlotPolicy(args.slot),
+                retrofit_force=args.retrofit_force,
+            ),
+        )
+        pre_safety = SafetyEngine.pre_approval().evaluate(SafetyContext(provenance=provenance))
+    except (ApprovalError, HashIndexError, PackageError, PlanError) as exc:
+        print(f"cairn approval verify: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    device, tool_binding, code = _approval_device(
+        args,
+        "cairn approval verify",
+        require_acceptable_tool=False,
+    )
+    if device is None:
+        return code
+    merged = _merge_tool_bindings(tools, tool_binding, "cairn approval verify")
+    if merged is None:
+        return EXIT_USAGE
+
+    try:
+        current = ApprovalInputs.from_manifest(
+            manifest,
+            plan,
+            pre_safety,
+            device,
+            tools=merged,
+        )
+    except ApprovalError as exc:
+        print(f"cairn approval verify: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    verdict = verify_approval(token_text, key, current)
+    payload = verdict.to_dict() | {
+        "plan_sha256": plan.plan_sha256,
+        "evidence_snapshot_sha256": pre_safety.evidence_snapshot_sha256,
+        "archive_sha256": manifest.archive_sha256,
+        "device_source": device.source.value,
+        "tools": [tool.to_dict() for tool in merged],
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        _print_approval_verdict(verdict, current)
+    return _exit_code_for_tri(verdict.state)
+
+
+def _approval_device(
+    args: argparse.Namespace,
+    command: str,
+    *,
+    require_acceptable_tool: bool,
+) -> tuple[DeviceBinding | None, ToolBinding | None, int]:
+    if args.device_fingerprint is not None:
+        binding = _caller_binding(args.nonce, args.device_fingerprint, command)
+        if binding is None:
+            return None, None, EXIT_USAGE
+        return binding, None, EXIT_OK
+
+    setup = _prepare_fastboot(args, command=command)
+    if setup is None:
+        return None, None, EXIT_USAGE
+    client, tool, simulated = setup
+    if simulated:
+        print(f"{command}: simulated probes are not device evidence", file=sys.stderr)
+        return None, None, EXIT_UNKNOWN
+    if require_acceptable_tool and tool.get("manifest_ok") is not True:
+        print(
+            f"{command}: fastboot tool is not acceptable: {tool.get('manifest_detail')}",
+            file=sys.stderr,
+        )
+        return None, None, EXIT_FAILED
+
+    result = client.probe(
+        serial=args.serial,
+        expected_serial=args.serial,
+        source=EvidenceSource.PROBED,
+    )
+    try:
+        device = build_device_binding(result, args.nonce)
+    except ApprovalError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None, None, EXIT_UNKNOWN
+    fastboot_binding = _tool_binding_from_payload(tool)
+    if fastboot_binding is None:
+        print(f"{command}: fastboot tool identity is unavailable", file=sys.stderr)
+        return None, None, EXIT_UNKNOWN
+    return device, fastboot_binding, EXIT_OK
+
+
+def _caller_binding(
+    nonce: str,
+    fingerprint: str,
+    command: str,
+) -> DeviceBinding | None:
+    try:
+        return caller_device_binding(nonce, fingerprint)
+    except ApprovalError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+
+
+def _tool_binding_from_payload(
+    tool: Mapping[str, object],
+) -> ToolBinding | None:
+    if tool.get("kind") != "fastboot":
+        return None
+    name = tool.get("name")
+    version = tool.get("version")
+    sha256 = tool.get("sha256")
+    if not isinstance(name, str) or not isinstance(sha256, str):
+        return None
+    if version is not None and not isinstance(version, str):
+        return None
+    try:
+        return ToolBinding(name=name, version=version, sha256=sha256)
+    except ApprovalError:
+        return None
+
+
+def _merge_tool_bindings(
+    tools: tuple[ToolBinding, ...],
+    probed: ToolBinding | None,
+    command: str,
+) -> tuple[ToolBinding, ...] | None:
+    if probed is None:
+        return tools
+    if any(tool.name == probed.name for tool in tools):
+        print(
+            f"{command}: --tool {probed.name!r} duplicates the probed fastboot binding",
+            file=sys.stderr,
+        )
+        return None
+    return tuple(sorted((*tools, probed), key=lambda tool: tool.name))
+
+
+def _parse_tool_bindings(
+    specs: list[str],
+    command: str,
+) -> tuple[ToolBinding, ...] | None:
+    bindings: dict[str, ToolBinding] = {}
+    for spec in specs:
+        name, separator, rest = spec.partition("=")
+        if not separator or not name or not rest:
+            print(
+                f"{command}: malformed --tool {spec!r}; use NAME=VERSION[@SHA256]",
+                file=sys.stderr,
+            )
+            return None
+        version, at, sha = rest.partition("@")
+        version = version.strip()
+        if not version:
+            print(f"{command}: --tool {spec!r} needs a version", file=sys.stderr)
+            return None
+        digest = sha.strip() if at else None
+        if digest == "":
+            print(f"{command}: --tool {spec!r} has an empty sha256", file=sys.stderr)
+            return None
+        try:
+            binding = ToolBinding(name=name.strip(), version=version, sha256=digest)
+        except ApprovalError as exc:
+            print(f"{command}: {exc}", file=sys.stderr)
+            return None
+        if binding.name in bindings:
+            print(f"{command}: duplicate --tool {binding.name!r}", file=sys.stderr)
+            return None
+        bindings[binding.name] = binding
+    return tuple(bindings[name] for name in sorted(bindings))
+
+
+def _read_token_text(path: Path) -> str:
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise ApprovalError(f"cannot stat approval token {path}: {exc}") from exc
+    if size > MAX_TOKEN_BYTES:
+        raise ApprovalError(f"approval token at {path} is above the {MAX_TOKEN_BYTES}-byte limit")
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ApprovalError(f"cannot read approval token {path}: {exc}") from exc
+
+
+def _text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _print_approval_token(token: ApprovalToken, token_sha256: str) -> None:
+    print(f"approval token sha256: {token_sha256}")
+    print(f"key id: {token.key_id}")
+    print(f"issued at: {token.issued_at.isoformat()}")
+    print(f"operator: {token.operator}")
+    print(f"reason: {token.reason}")
+    print(f"binding sha256: {token.binding_sha256}")
+    print(f"plan sha256: {token.inputs.plan_sha256}")
+    print(f"evidence snapshot: {token.inputs.evidence_snapshot_sha256}")
+    print(f"archive sha256: {token.inputs.archive_sha256}")
+    print(f"package entries: {len(token.inputs.package_hashes)}")
+    for name, digest in token.inputs.package_hashes:
+        print(f"  {name}: {digest}")
+    print(f"device nonce: {token.inputs.device.nonce}")
+    print(f"device fingerprint: {token.inputs.device.fingerprint_sha256}")
+    print(f"device source: {token.inputs.device.source.value}")
+    if token.inputs.tools:
+        print("tools:")
+        for tool in token.inputs.tools:
+            print(
+                f"  {tool.name}: version={tool.version or 'unknown'} "
+                f"sha256={tool.sha256 or 'unknown'}"
+            )
+    else:
+        print("tools: none")
+    print("signature: valid (HMAC-SHA256)")
+    print("note: this token is a consistency boundary, not an authorization boundary")
+
+
+def _print_approval_verdict(
+    verdict: ApprovalVerdict,
+    current: ApprovalInputs,
+) -> None:
+    print(f"approval verdict: {verdict.state.name}")
+    for reason in verdict.reasons:
+        print(f"  {reason}")
+    for warning in verdict.warnings:
+        print(f"  warning: {warning}")
+    if verdict.mismatches:
+        print("mismatches: " + ", ".join(verdict.mismatches))
+    if verdict.token_sha256 is not None:
+        print(f"token sha256: {verdict.token_sha256}")
+    if verdict.binding_sha256 is not None:
+        print(f"approval binding sha256: {verdict.binding_sha256}")
+    print(f"current binding sha256: {current.binding_sha256}")
+    print("note: a matching approval is not authorization; other safety rules still apply")
+    print("read-only: no device writes")
 
 
 def _print_plan(assessment: PlanAssessment) -> None:
@@ -1122,12 +1823,14 @@ def _prepare_fastboot(
     command: str,
 ) -> tuple[FastbootClient, dict[str, object], bool] | None:
     runner = ToolRunner()
-    if args.simulate is not None:
+    simulate = getattr(args, "simulate", None)
+    if simulate is not None:
         prefix = (sys.executable, "-m", "cairn.sim.fastboot_sim")
-        extra_env = {TRANSCRIPT_ENV: str(args.simulate)}
+        extra_env = {TRANSCRIPT_ENV: str(simulate)}
         tool: dict[str, object] = {
             "kind": "simulated",
-            "transcript": str(args.simulate),
+            "name": "fastboot",
+            "transcript": str(simulate),
             "manifest_ok": None,
             "simulated": True,
         }
@@ -1147,6 +1850,7 @@ def _prepare_fastboot(
         return None
     tool = {
         "kind": "fastboot",
+        "name": "fastboot",
         "path": str(report.path),
         "version": report.version,
         "sha256": report.sha256,
@@ -1320,6 +2024,14 @@ def _print_probe(
         evidence = fact.evidence
         value = "" if evidence.value is None else f" {evidence.value}"
         print(f"{fact.name}: {evidence.state.name}{value} - {evidence.detail}")
+    fingerprint = payload.get("device_fingerprint")
+    if isinstance(fingerprint, str):
+        print(f"device fingerprint: {fingerprint}")
+    else:
+        print("device fingerprint: unavailable")
+        detail = payload.get("device_fingerprint_detail")
+        if isinstance(detail, str):
+            print(f"  {detail}")
     unknown = sum(1 for fact in result.facts if fact.evidence.state.is_unknown)
     print(f"{len(result.facts)} facts, {unknown} unknown; read-only probe, no device writes")
 

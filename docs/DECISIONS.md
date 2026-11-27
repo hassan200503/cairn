@@ -28,6 +28,7 @@ Decisions are append-only. To change one, add a new ADR that supersedes it.
 | ADR-022 | Device stored-index reads are vendor-specific claims, not AVB verification | Accepted | 2026-11-26 |
 | ADR-023 | A caller-provided lock state is contextual input, not device-trust evidence | Accepted | 2026-11-26 |
 | ADR-024 | Plan structure and safety authorization are separate gates | Accepted | 2026-11-26 |
+| ADR-025 | Approval binding is a consistency gate, enforced as SR-018 before any write | Accepted | 2026-11-27 |
 
 ---
 
@@ -435,3 +436,39 @@ tool, or lock/key inputs remain UNKNOWN and block.
 mistake it for permission to execute. A later catalog-bound preflight must collect
 and bind the missing evidence before a plan can be executable (KU-031). No write
 path is introduced.
+
+---
+
+## ADR-025 - Approval binding is a consistency gate, enforced as SR-018
+
+**Context.** The planner hash and the safety evidence snapshot must both be fixed
+before execution, and any silent drift between approval and execution is exactly the
+TOCTOU failure the safety model must catch. Cairn has no authorization secret and
+cannot defend against a fully compromised host (ADR-014). It still needs a
+tamper-evident, reproducible statement that a specific plan over a specific package
+on a specific device with specific tools was approved.
+
+**Decision.** An approval is a canonical binding, not an authorization boundary. It
+covers the plan hash, the evidence-snapshot hash, the archive hash, every package
+entry hash, a device binding (host-generated session nonce plus a fingerprint of the
+required and present optional identity facts from one read-only probe), and the
+identity (name, version, and/or sha256) of every tool used to produce the plan.
+
+The binding is serialized as canonical JSON, hashed to a single `binding_sha256`, and
+signed with HMAC-SHA256 under a 32-byte per-session consistency key. Strict parsing
+rejects duplicate keys, unknown fields, wrong types, a wrong key id, and any binding
+mismatch. Any byte change in any bound input invalidates the approval: `verify`
+returns `FALSE` with named mismatches, or `UNKNOWN` when a required current input
+cannot be established. A caller-supplied device fingerprint is recorded as `CALLER`
+and never treated as device evidence.
+
+The safety engine carries this as rule **SR-018** ("approval binding valid") in the
+post-approval rule set. `PRE_APPROVAL_RULES` omits SR-018 so that `cairn plan` and
+`approval issue` can evaluate the pre-approval gate without the approval that does
+not exist yet; SR-018 is only evaluated when a token is present. SR-018 is in the
+never-overridable set, alongside SR-003, SR-004, SR-012, and SR-013.
+
+**Consequences.** `cairn approval keygen|issue|verify|inspect` exist and write only
+token files, never a device. The key is a consistency key, not a security key, and
+this must be stated wherever the approval is described. Approval binds inputs; it
+does not authorize actions, and no write path is introduced by it (ADR-009, ADR-014).

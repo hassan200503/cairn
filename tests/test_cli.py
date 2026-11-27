@@ -307,7 +307,7 @@ def test_plan_dry_run(tmp_path, capsys) -> None:
     assert "structurally executable: TRUE" in output
     assert "safety verdict: UNKNOWN" in output
     assert "safety blocking:" in output
-    for rule_id in ("SR-001", "SR-003", "SR-004", "SR-012", "SR-013"):
+    for rule_id in ("SR-001", "SR-003", "SR-004", "SR-012", "SR-013", "SR-018"):
         assert rule_id in output
     assert "executable: FALSE" in output
     assert "steps: 3" in output
@@ -343,7 +343,9 @@ def test_plan_json_is_machine_readable(tmp_path, capsys) -> None:
         "SR-004",
         "SR-012",
         "SR-013",
+        "SR-018",
     }
+    assert payload["safety"]["snapshot_excludes"] == ["SR-018"]
     assert len(payload["plan_sha256"]) == 64
     assert len(payload["steps"]) == 3
 

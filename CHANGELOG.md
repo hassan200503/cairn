@@ -73,6 +73,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   overrides log operator, reason, timestamp, evidence-snapshot hash, and exact report
   text without converting UNKNOWN to TRUE. Checks that assert a result without
   evidence references are downgraded to UNKNOWN.
+- Approval binding and `cairn approval keygen|issue|verify|inspect`: a canonical
+  binding over the plan hash, evidence-snapshot hash, archive hash, every package
+  entry hash, a device binding (host-generated nonce plus a probed or caller
+  fingerprint), and tool identities, serialized to `binding_sha256` and signed with
+  HMAC-SHA256 under a per-session consistency key. Strict parsing rejects duplicate
+  keys, unknown fields, wrong types, a wrong key id, and any binding mismatch; any
+  byte change in any bound input invalidates the approval. The engine adds rule
+  SR-018 ("approval binding valid") to a post-approval rule set
+  (`PRE_APPROVAL_RULES` omits it); SR-018 is never overridable. Approval is a
+  consistency boundary, not an authorization boundary (ADR-014, ADR-025), and it
+  writes only token files, never a device.
 - Rollback Oracle v0 and `cairn rollback check`: applies the AOSP rollback
   inequality to the counters a VBMeta package declares, including chained
   partitions at the location named by the chain descriptor and nested chains up

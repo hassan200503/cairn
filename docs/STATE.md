@@ -100,6 +100,10 @@ Design notes, in the order the reader should meet them:
 | `cairn inspect PACKAGE` | read-only factory/OTA zip inspection, no extraction | 0/1 |
 | `cairn provenance PACKAGE --index INDEX` | match a package against a local hash index | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn plan PACKAGE --index INDEX` | read-only vendor-order dry run plus SR-001/002/003/004/012/013 safety report | 0 both structural and safety gates pass / 1 error / 3 blocked |
+| `cairn approval keygen --out KEY` | create a 32-byte approval consistency key (never a device write) | 0/1 |
+| `cairn approval issue PACKAGE --index INDEX --key KEY --operator OP --reason TEXT --nonce NONCE (--fastboot PATH [--serial S] \| --device-fingerprint HEX)` | issue an HMAC-signed approval token after the pre-approval gate passes | 0/1/2/3 |
+| `cairn approval verify TOKEN PACKAGE --index INDEX --key KEY --nonce NONCE (--fastboot PATH \| --device-fingerprint HEX)` | compare a token against the current plan, evidence snapshot, package, device, and tools | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
+| `cairn approval inspect TOKEN --key KEY` | verify and print a signed approval token | 0/1 |
 | `cairn avb info IMAGE` | parse VBMeta headers and descriptors | 0/1 |
 | `cairn avb digest IMAGE [--chain NAME=PATH]` | compute the AOSP VBMeta digest | 0/1/2 |
 | `cairn avb verify IMAGE [--key KEY] [--chain NAME=PATH]` | verify signature and, with `--chain`, the chain of trust | 0 valid / 1 invalid / 3 unknown |
@@ -210,6 +214,10 @@ These statements are enforced in code and in output text. Do not weaken them.
 - A coherent chain is **not** a trust anchor without an expected key (ADR-020).
 - `avb key-check` takes caller-supplied lock state and trusted-key inputs; it is
   not device evidence and cannot satisfy SR-013 (ADR-023, KU-029).
+- An approval token is a consistency boundary, not an authorization boundary. It
+  binds a plan, an evidence snapshot, a package, a device, and tool identities, but
+  it does not defend against a compromised host and the HMAC key is a per-session
+  consistency key, not a security secret (ADR-014, ADR-025).
 - A rollback comparison without `--device` uses caller-supplied stored indexes.
   With `--device`, the stored indexes are a vendor-specific device claim, not AVB
   verification; absence, conflict, or a failed read is `UNKNOWN` (ADR-021,
@@ -294,12 +302,12 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 437 passed, 2 skipped
+uv run pytest -q               # 501 passed, 2 skipped
 ```
 
 The latest CI run for a pushed commit is `45819113387` for `9ff02bf` and is
-green. The 437-test baseline above was confirmed locally after the safety-gated
-plan slice; CI has not run the slices after `9ff02bf` yet.
+green. The 501-test baseline above was confirmed locally after the approval-binding
+slice; CI has not run the slices after `9ff02bf` yet.
 
 The two local skips are environmental, not gaps in coverage:
 
@@ -380,8 +388,14 @@ push, confirm CI green.
    all six current rules and refuses an executable result for any `FALSE` or
    un-overridden `UNKNOWN`. Remaining work is catalog-bound collection and binding
    of fresh identity, AVB, rollback, tool, and lock/key evidence (KU-031).
-4. **T13 — Approval binding.** Approval token over plan hash, snapshot hash,
-   package hashes, a device-bound nonce, and tool versions, with a TOCTOU test.
+4. **T13 — Approval binding (landed).** `cairn approval keygen|issue|verify|inspect`
+   bind the plan hash, evidence-snapshot hash, archive hash, every package entry
+   hash, a device binding (nonce plus a probed or caller fingerprint), and tool
+   identities, and enforce the result as rule SR-018. The binding is canonical JSON
+   hashed to `binding_sha256` and HMAC-SHA256 signed under a per-session consistency
+   key; any byte change in any bound input invalidates it. It is a consistency
+   boundary, not an authorization boundary (ADR-014, ADR-025). Remaining work is
+   mutation and TOCTOU tests and CLI-to-safety-engine wiring inside the executor.
 5. **T14 — Journal and executor.** Write-ahead journal, idempotency classes,
    reconciliation, and a crash harness that kills at every journal point. This
    is the first slice that may write, and it is still gated behind simulator
@@ -389,6 +403,13 @@ push, confirm CI green.
 6. **T15 — Recovery Kit and the M6 gate.** Threat model, recovery asset
    verification, encrypted device-bound vault design, restore-only-same-device
    rule, and a recovery drill script.
+
+The **guided session orchestrator** (`cairn wizard`) is the next slice, in front of
+T14 as the M11 spine: one resumable, fail-closed, read-only flow that chains
+doctor → probe → inspect → provenance → AVB → rollback → plan → approval and
+explains each step with its verification level. It writes no device and adds no
+new trust rung; it makes the existing read-only primitives usable by a technician
+and is the substrate the future write path will hang from.
 
 ---
 

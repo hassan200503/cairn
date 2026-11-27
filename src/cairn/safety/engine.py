@@ -24,6 +24,10 @@ from cairn.provenance.hash_index import ProvenanceResult
 from cairn.tools.manifest import ToolReport
 
 _RULE_ID_RE: Final = re.compile(r"^SR-\d{3}$")
+_APPROVAL_RULE_ID: Final = "SR-018"
+_NEVER_OVERRIDABLE: Final[frozenset[str]] = frozenset(
+    {"SR-003", "SR-004", "SR-012", "SR-013", "SR-018"}
+)
 
 
 class SafetyError(ConfigurationError):
@@ -44,7 +48,7 @@ class RuleSpec:
             raise SafetyError(f"invalid rule id {self.rule_id!r}")
         if not self.title.strip():
             raise SafetyError(f"{self.rule_id} must have a title")
-        if self.unknown_overridable and self.rule_id.startswith(("SR-003", "SR-004")):
+        if self.unknown_overridable and self.rule_id in _NEVER_OVERRIDABLE:
             raise SafetyError(f"{self.rule_id} is critical and must not be overridable")
 
 
@@ -55,6 +59,7 @@ class CheckState:
     state: Tri
     detail: str
     evidence_ids: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.detail.strip():
@@ -62,6 +67,9 @@ class CheckState:
         for evidence_id in self.evidence_ids:
             if not evidence_id.strip():
                 raise SafetyError("evidence ids must not be empty")
+        for warning in self.warnings:
+            if not warning.strip():
+                raise SafetyError("check warnings must not be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +114,7 @@ class SafetyContext:
     device_identity: DeviceIdentity | None = None
     package_identity: PackageIdentity | None = None
     identity_evidence_ids: tuple[str, ...] = ()
+    approval: CheckState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +186,7 @@ class SafetyReport:
     blocking: tuple[str, ...]
     evidence_snapshot_sha256: str
     report_text: str
+    snapshot_excludes: tuple[str, ...] = ()
 
     def rule(self, rule_id: str) -> RuleResult | None:
         for result in self.rules:
@@ -190,6 +200,7 @@ class SafetyReport:
             "can_proceed": self.can_proceed,
             "blocking": list(self.blocking),
             "evidence_snapshot_sha256": self.evidence_snapshot_sha256,
+            "snapshot_excludes": list(self.snapshot_excludes),
             "rules": [result.to_dict() for result in self.rules],
             "overrides": [override.to_dict() for override in self.overrides],
             "report_text": self.report_text,
@@ -248,6 +259,11 @@ _SR_013 = RuleSpec(
     "SR-013",
     "lock state is known and trusted-key checks pass",
     source_refs=("SAFETY_RULES SR-013", "AOSP AVB public key"),
+)
+_SR_018 = RuleSpec(
+    "SR-018",
+    "approval binding matches the current plan and evidence",
+    source_refs=("SAFETY_RULES SR-018", "SPEC_V2 2.10", "ADR-025"),
 )
 
 
@@ -522,6 +538,14 @@ def _sr013_lock_key(ctx: SafetyContext, now: datetime, spec: RuleSpec) -> RuleRe
     )
 
 
+def _sr018_approval(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
+    return _declared_check(
+        spec,
+        ctx.approval,
+        "approval binding is unavailable",
+    )
+
+
 def _declared_check(
     spec: RuleSpec,
     check: CheckState | None,
@@ -530,19 +554,29 @@ def _declared_check(
     if check is None:
         return _result(spec, Tri.UNKNOWN, missing_reason)
     if check.state is Tri.UNKNOWN:
-        return _result(spec, Tri.UNKNOWN, check.detail, evidence_ids=check.evidence_ids)
+        return _result(
+            spec,
+            Tri.UNKNOWN,
+            check.detail,
+            evidence_ids=check.evidence_ids,
+            warnings=check.warnings,
+        )
     if not check.evidence_ids:
         return _result(
             spec,
             Tri.UNKNOWN,
             f"{check.detail}; no evidence references were supplied",
-            warnings=("a non-UNKNOWN check without evidence is treated as UNKNOWN",),
+            warnings=(
+                *check.warnings,
+                "a non-UNKNOWN check without evidence is treated as UNKNOWN",
+            ),
         )
     return _result(
         spec,
         check.state,
         check.detail,
         evidence_ids=check.evidence_ids,
+        warnings=check.warnings,
     )
 
 
@@ -553,6 +587,11 @@ DEFAULT_RULES: Final[tuple[tuple[RuleSpec, RuleEvaluator], ...]] = (
     (_SR_004, _sr004_rollback),
     (_SR_012, _sr012_tool),
     (_SR_013, _sr013_lock_key),
+    (_SR_018, _sr018_approval),
+)
+
+PRE_APPROVAL_RULES: Final[tuple[tuple[RuleSpec, RuleEvaluator], ...]] = tuple(
+    (spec, evaluator) for spec, evaluator in DEFAULT_RULES if spec.rule_id != _APPROVAL_RULE_ID
 )
 
 
@@ -571,6 +610,11 @@ class SafetyEngine:
                 raise SafetyError(f"duplicate safety rule {spec.rule_id}")
             by_id[spec.rule_id] = (spec, evaluator)
         self._rules = MappingProxyType(by_id)
+
+    @classmethod
+    def pre_approval(cls) -> SafetyEngine:
+        """An engine that evaluates every rule except the approval binding."""
+        return cls(PRE_APPROVAL_RULES)
 
     def evaluate(
         self,
@@ -600,7 +644,16 @@ class SafetyEngine:
             or (result.state is Tri.UNKNOWN and result.rule_id not in overridden)
         )
         can_proceed = not blocking
-        report_text = _render_report(results, records, verdict, can_proceed, blocking, snapshot)
+        snapshot_excludes = (_APPROVAL_RULE_ID,)
+        report_text = _render_report(
+            results,
+            records,
+            verdict,
+            can_proceed,
+            blocking,
+            snapshot,
+            snapshot_excludes,
+        )
         records = tuple(replace(record, report_text=report_text) for record in records)
         return SafetyReport(
             rules=results,
@@ -610,6 +663,7 @@ class SafetyEngine:
             blocking=blocking,
             evidence_snapshot_sha256=snapshot,
             report_text=report_text,
+            snapshot_excludes=snapshot_excludes,
         )
 
     @staticmethod
@@ -671,7 +725,7 @@ class SafetyEngine:
 
 def _snapshot_hash(results: tuple[RuleResult, ...]) -> str:
     payload = json.dumps(
-        [result.to_dict() for result in results],
+        [result.to_dict() for result in results if result.rule_id != _APPROVAL_RULE_ID],
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -685,6 +739,7 @@ def _render_report(
     can_proceed: bool,
     blocking: tuple[str, ...],
     snapshot: str,
+    snapshot_excludes: tuple[str, ...],
 ) -> str:
     lines = [
         "Cairn safety report",
@@ -692,6 +747,7 @@ def _render_report(
         f"proceed: {'yes' if can_proceed else 'no'}",
         "blocking: " + (", ".join(blocking) if blocking else "none"),
         f"evidence snapshot: {snapshot}",
+        "snapshot excludes: " + (", ".join(snapshot_excludes) if snapshot_excludes else "none"),
     ]
     for result in results:
         lines.append(f"{result.rule_id} {result.state.name}: {result.reason}")
