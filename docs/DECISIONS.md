@@ -536,3 +536,48 @@ the simulator, and every output says so. The real-device transport is a future s
 that must require a TRUE (or overridable-UNKNOWN-allowed) `can_proceed` safety gate,
 the T15 recovery kit, and the M6 drill before it can be constructed. The journal is
 tamper-evident, not tamper-proof, matching ADR-014.
+
+## ADR-028 - The recovery vault is encrypted, device-bound, and restore-only-same-device
+
+**Date:** 2026-11-27
+
+**Context.** T15 (the Recovery Kit) needs a backup of critical partitions
+(`persist`, modem NVRAM, and similar) that survives a host change and a long
+repair, and that can never restore one device's identity or calibration data onto
+another device. SR-009 makes a verified vault backup a precondition for wipe or
+relock, and the M6 gate (G3) requires a drill that proves both the round trip and
+the cross-device refusal. ADR-027 leaves every write path simulator-gated until
+this kit exists.
+
+**Decision.** The vault lives in `cairn.recovery.vault` as a canonical-JSON
+document with three properties, each fail-closed:
+
+1. *Encryption and integrity.* Two domain-separated 256-bit keys are derived from
+   the passphrase plus a random per-vault salt using HMAC-SHA256 in an HKDF-style
+   extract/expand; images are encrypted with an HMAC-SHA256-CTR keystream under a
+   per-entry random nonce, and the whole canonical document is covered by an
+   encrypt-then-MAC HMAC. A MAC-valid entry whose plaintext does not match its
+   recorded sha256 is refused at decrypt time. The construction is deliberately
+   standard-library-only, matching the repo's dependency policy, and is explicitly
+   NOT externally reviewed yet — that review is KU-032 and a release gate.
+2. *Device binding.* The vault records `product`, `serial_sha256`, and
+   `fingerprint_sha256`. `restore_check` refuses on any mismatch and this refusal
+   is never overridable: cross-device restore can brick two devices, not one.
+   Raw serials are never accepted anywhere in the CLI — only their sha256 — so no
+   serial enters logs, sessions, or transcripts (repo rule 10).
+3. *Restore path.* Restore and the M6 drill construct only a
+   `SimulatedFastbootTransport` from a transcript replay; there is no argument
+   that points them at a real fastboot binary (ADR-027). Drill reports are
+   labelled `SIMULATED` and are never device evidence.
+
+The safety engine gains SR-008 (recovery readiness) and SR-009 (vault backup) as
+blocking, non-overridable-for-bootchain rules that evaluate to UNKNOWN and block
+when no recovery input is supplied.
+
+**Consequences.** `cairn recovery backup|verify|restore|drill` and the drill
+report exist today, and the suite proves the cross-device refusal and the
+tamper/MAC/wrong-passphrase paths. What this does NOT buy: no KDF stretching yet
+(a format-version change when added), no external crypto review (KU-032), no
+hardware drill, and no real-device write path — the M6 gate still requires the
+external reviews, real transcripts, and the Virtual A/B state machines before a
+real transport can be constructed.

@@ -115,6 +115,8 @@ class SafetyContext:
     package_identity: PackageIdentity | None = None
     identity_evidence_ids: tuple[str, ...] = ()
     approval: CheckState | None = None
+    recovery_readiness: CheckState | None = None
+    vault_backup: CheckState | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +267,46 @@ _SR_018 = RuleSpec(
     "approval binding matches the current plan and evidence",
     source_refs=("SAFETY_RULES SR-018", "SPEC_V2 2.10", "ADR-025"),
 )
+_SR_008 = RuleSpec(
+    "SR-008",
+    "recovery assets verify and a last-resort path is stated",
+    source_refs=("SAFETY_RULES SR-008", "SPEC_V2 3.7"),
+)
+_SR_009 = RuleSpec(
+    "SR-009",
+    "critical partitions are backed up in a device-bound vault before wipe/relock",
+    source_refs=("SAFETY_RULES SR-009", "SPEC_V2 3.7", "ADR-028"),
+)
+
+
+def _sr008_recovery(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
+    check = ctx.recovery_readiness
+    if check is None:
+        return _result(spec, Tri.UNKNOWN, "recovery readiness was not evaluated")
+    return _result(
+        spec,
+        check.state,
+        check.detail,
+        evidence_ids=check.evidence_ids,
+        warnings=check.warnings,
+    )
+
+
+def _sr009_vault(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
+    check = ctx.vault_backup
+    if check is None:
+        return _result(
+            spec,
+            Tri.UNKNOWN,
+            "no vault backup was supplied for the wipe/relock gate",
+        )
+    return _result(
+        spec,
+        check.state,
+        check.detail,
+        evidence_ids=check.evidence_ids,
+        warnings=check.warnings,
+    )
 
 
 def _sr001_identity(ctx: SafetyContext, _now: datetime, spec: RuleSpec) -> RuleResult:
@@ -585,6 +627,8 @@ DEFAULT_RULES: Final[tuple[tuple[RuleSpec, RuleEvaluator], ...]] = (
     (_SR_002, _sr002_provenance),
     (_SR_003, _sr003_avb_chain),
     (_SR_004, _sr004_rollback),
+    (_SR_008, _sr008_recovery),
+    (_SR_009, _sr009_vault),
     (_SR_012, _sr012_tool),
     (_SR_013, _sr013_lock_key),
     (_SR_018, _sr018_approval),

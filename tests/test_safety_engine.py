@@ -88,6 +88,8 @@ def _context(**overrides: object) -> SafetyContext:
         package_identity=PackageIdentity("panther", "US", "rev-1"),
         identity_evidence_ids=("ev-device",),
         approval=CheckState(Tri.TRUE, "approval binding matches", ("ev-approval",)),
+        recovery_readiness=CheckState(Tri.TRUE, "recovery assets verified", ("ev-recovery",)),
+        vault_backup=CheckState(Tri.TRUE, "vault backup bound to device", ("ev-vault",)),
     )
     return replace(base, **overrides)
 
