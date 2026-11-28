@@ -100,7 +100,9 @@ Update the relevant doc in the same change:
   vault, SR-008/SR-009, M6 drill), the Virtual A/B merge-state gate
   (SR-010, `cairn vab status`), the dynamic-partition mode gate
   (SR-011, `cairn vab dynpart`), and the modeled snapshot cancel/merge
-  flows (`cairn vab cancel|merge`, simulator-only with typed approval)
+  flows (`cairn vab cancel|merge`, simulator-only with typed approval), the
+  super-metadata parser with its pinned-source `lpmake` oracle and
+  differential tests, and the mutation harness (48/48 mutants killed)
   have landed in slices. `cairn plan` safety-gates
   its structural dry run and refuses FALSE or UNKNOWN rules; `cairn execute` runs
   an approved plan end to end in the fastboot simulator only (ADR-027). The

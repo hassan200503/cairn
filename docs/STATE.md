@@ -10,10 +10,11 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the approval-binding mutation tests (T20;
-48/48 mutants killed) and the KU-033 record of the super-metadata oracle
-blocker (T21 is blocked: no `lpmake`/`lpunpack` package exists to differentially
-test against). The vault and
+**Last updated:** 2026-11-27, after the KU-033 record (T21 blocked on a
+missing oracle) was resolved: the official AOSP `lpmake` is now built from
+pinned source in CI (`tools/oracle/`), and the super-metadata parser
+(`cairn.vab.super_meta`) landed with a differential test suite and a golden
+fixture (T21, T24). The vault and
 drill are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
@@ -75,7 +76,7 @@ src/cairn/
   wizard/        resumable read-only preflight stages, strict session persistence, rendering
   executor/      simulator-gated plan executor, hash-chained write-ahead journal
   recovery/      encrypted device-bound vault, SR-008/SR-009 asset checks, M6 drill
-  vab/           Virtual A/B merge-state (SR-010), dynamic-partition mode (SR-011), and snapshot flows
+  vab/           Virtual A/B merge-state (SR-010), dynamic-partition mode (SR-011), snapshot flows, super metadata parser
 ```
 
 Design notes, in the order the reader should meet them:
@@ -355,32 +356,38 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 584 passed, 2 skipped
+uv run pytest -q               # 591 passed, 5 skipped
 ```
 
 The latest CI run is `46003349752` for the T14 executor slice merged through
 pull request [#2](https://github.com/hassan200503/cairn/pull/2) (merge `4cf91bc`)
 and is green: lint, format, and types; the AOSP libsparse sparse oracle; and
-tests on Ubuntu and Windows under Python 3.12 and 3.14. The T15–T20 slices
+tests on Ubuntu and Windows under Python 3.12 and 3.14. The T15–T21 slices
 postdate that run; their commits' CI runs must be green before merge. The
-584-test baseline above was confirmed locally on the T20 slice.
+591-test baseline above was confirmed locally on the T21 slice.
 
-The two local skips are environmental, not gaps in coverage:
+The five local skips are environmental, not gaps in coverage:
 
 - `tests/test_package_archive.py` — `zipfile` normalizes backslashes to slashes
   on Windows, so the Windows-specific archive-name case is skipped there.
 - `tests/test_sparse_oracle.py` — AOSP `libsparse` (`img2simg`/`simg2img`) is
   not installed locally. CI installs `android-sdk-libsparse-utils` and runs this
   oracle on Ubuntu, so the oracle is enforced there.
+- `tests/test_super_meta.py` — the `lpmake` differential layer needs the
+  oracle built from pinned AOSP source (`tools/oracle/build_lpmake.sh`); CI
+  builds it in a dedicated Ubuntu job. The golden-fixture and negative tests
+  run everywhere.
 
-CI (`.github/workflows/ci.yml`) runs six jobs on every push to `main`:
+CI (`.github/workflows/ci.yml`) runs seven jobs on every push to `main`:
 
 1. `Lint, format, and types` (ubuntu) — ruff check, ruff format check, mypy.
 2. `Sparse oracle (AOSP libsparse)` (ubuntu) — installs libsparse, runs the oracle.
-3. `Test (ubuntu-latest, Python 3.12)`
-4. `Test (ubuntu-latest, Python 3.14)`
-5. `Test (windows-latest, Python 3.12)`
-6. `Test (windows-latest, Python 3.14)`
+3. `Super oracle (AOSP lpmake from pinned source)` (ubuntu) — builds `lpmake`
+   per `tools/oracle/PINNED.md`, runs the super-metadata differential tests.
+4. `Test (ubuntu-latest, Python 3.12)`
+5. `Test (ubuntu-latest, Python 3.14)`
+6. `Test (windows-latest, Python 3.12)`
+7. `Test (windows-latest, Python 3.14)`
 
 The cloud Windows runners have no USB controllers, so the Host Doctor verdict
 there is legitimately `FALSE`. Integration tests assert on checks, never on a
@@ -424,9 +431,12 @@ These are the reasons the remaining work cannot simply be "finished":
   drill have only this project's own review and tests; external sign-off is an
   explicit T15 acceptance condition (KU-032), and no real-device write may
   depend on the vault until it lands.
-- **No super-metadata oracle.** No Debian/Ubuntu package ships `lpmake`/
-  `lpunpack` (KU-033), so the SR-011 metadata half cannot be differentially
-  tested against an official tool; the parser is deferred, not hand-rolled.
+- **No real-device super image fixtures.** The official AOSP `lpmake` is now
+  built from pinned source in CI (`tools/oracle/`), and the super-metadata
+  parser is differentially tested against it (T21/T24, closing the KU-033
+  tool gap). Real factory `super.img`/`super_empty.img` fixtures from actual
+  devices are still missing, so vendor metadata variants remain unverified
+  (KU-016).
 - **No Pixel verifier oracle.** `pixel_factory_image_verify.py` has not been
   run against our output.
 - **EDL, MediaTek, and Samsung backends** are research-only; no hardware, no
@@ -528,16 +538,24 @@ push, confirm CI green.
     pinned the `archive_sha256` comparison — now killed by
     `test_verify_is_false_when_the_archive_hash_changed`. Recorded run:
     **48/48 mutants killed** (33 rule + 15 approval).
-12. **T21 — Super metadata parser (blocked, KU-033).** The SR-011 metadata
-    half (parsing `super.img` geometry and LP metadata to confirm layout
-    before a write) cannot proceed: no Debian or Ubuntu package ships
-    `lpmake`/`lpunpack`, so there is no CI-installable official oracle, and
-    AGENTS.md rule 9 forbids a hand-rolled parser without differential
-    testing. The blocker and its resolution paths (build AOSP
-    dynamic-partition tools from pinned source, or obtain real factory
-    `super.img` fixtures verified with `lpdump`) are recorded in KU-033 and
-    the T21 entry in `EXECUTION_PLAN.md`. The executor's TOCTOU re-hash guard
-    was re-checked and is covered by
+12. **T21 — Super metadata parser (landed, with the T24 oracle).** The
+    official AOSP `lpmake` host tool is built from pinned source
+    (`tools/oracle/build_lpmake.sh`, pins in `tools/oracle/PINNED.md`) in a
+    dedicated CI job, closing the KU-033 tool gap. `cairn.vab.super_meta`
+    parses both on-disk layouts — full super images (geometry at 4096,
+    primary/backup metadata copies) and empty supers (`lpmake
+    --device-size auto`, metadata at 4096) — with strict validation: geometry
+    and header and table checksums, version bounds, table bounds and entry
+    sizes, name charset and uniqueness, attribute mask, extent target
+    validation. Any anomaly raises `SuperMetadataError`, which callers must
+    treat as UNKNOWN. Tests: a golden fixture generated by the oracle with a
+    pinned SHA-256, differential tests against fresh oracle output (full
+    image, super-empty, slot-suffixing; run in CI, skipped locally), and
+    negative checksum/truncation tests. Remaining work: wire the parsed
+    layout into a rule or the planner (it must never feed a write decision
+    until its differential coverage is CI-enforced, which it now is), and
+    real-device `super.img` fixtures (KU-016). The executor's TOCTOU re-hash
+    guard was re-checked and is covered by
     `test_execute_refuses_image_that_changed_after_approval` and the
     not-covered-by-binding test.
 
