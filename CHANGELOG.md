@@ -6,7 +6,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-27
+
 ### Added
+
+- Local workbench UI (ADR-031): `cairn ui` serves a loopback-only dashboard
+  (`127.0.0.1:8722`) over the audited core — doctor, probe, wizard, plan,
+  execute, avb, rollback, vab, catalog, and recovery backup/drill — with
+  tri-state TRUE/FALSE/UNKNOWN colour rendering. No safety logic lives in the
+  UI; every write path is the same simulator-gated transport as the CLI
+  (ADR-027). 23 new tests in `tests/test_ui.py`.
+- Windows installer: `tools/installer/build.ps1` builds a PyInstaller onefile
+  console bundle and wraps it with Inno Setup into `CairnSetup-<version>.exe`
+  (per-user install, user PATH entry, Start Menu shortcut that opens the
+  dashboard). The bundle is unsigned — see KU-034.
+- Real dashboard screenshots (headless-browser captures) in
+  `docs/screenshots/ui-*.png`, embedded in the README.
+
+### Changed
+
+- The UI's Execute form exposes `staging_dir` (required so the transcript's
+  staged paths match) and renders per-step tri-state rows.
+
+### Added (from 0.2.x, unreleased)
 
 - Catalog file signing (ADR-030): `cairn catalog sign` writes a detached
   HMAC-SHA256 signature of the exact file bytes; `cairn catalog verify`

@@ -30,3 +30,8 @@ transcripts/private/
 .DS_Store
 Thumbs.db
 *.log
+
+# PyInstaller / Inno Setup build artifacts
+cairn.spec
+tools/installer/dist/
+tools/installer/installer/

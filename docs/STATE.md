@@ -10,14 +10,13 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the local UI slice (ADR-031): `cairn ui`
-serves a loopback-only dashboard (`127.0.0.1:8722`) over the audited core —
-JSON endpoints for doctor, probe, wizard, plan, execute, avb, rollback, vab,
-catalog, and recovery backup/drill — with tri-state TRUE/FALSE/UNKNOWN colour
-rendering and no safety logic of its own; writes stay simulator-gated
-(ADR-027). Just before: catalog signing (ADR-030), catalog rollback bounds,
-and the v0.2.0 release (installer scripts, README overhaul, tagged GitHub
-release). The vault and drill remain simulator-only and externally unreviewed.
+**Last updated:** 2026-11-27, at the v0.3.0 release: the local UI (ADR-031),
+real dashboard screenshots, and the Windows installer pipeline
+(`tools/installer/build.ps1`: PyInstaller onefile bundle wrapped with Inno
+Setup into a per-user `CairnSetup-<version>.exe`, unsigned — KU-034). Writes
+stay simulator-gated (ADR-027); the vault and drill remain externally
+unreviewed (KU-032). Just before: catalog signing (ADR-030), catalog rollback
+bounds, and the v0.2.0 release.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
