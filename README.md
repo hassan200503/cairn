@@ -113,7 +113,15 @@ hash-chained journal:
 
 ## Install
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+**Windows installer (recommended):** download `CairnSetup-<version>.exe` from the
+latest [GitHub release](https://github.com/hassan200503/cairn/releases/latest)
+and run it. It installs per-user (no admin), adds Cairn to your PATH, and puts a
+**Cairn Workbench** shortcut in the Start Menu that opens the local dashboard.
+The installer is unsigned (KU-034): SmartScreen will ask for confirmation on
+first run. Rebuild it yourself from source with `tools/installer/build.ps1`
+(requires PyInstaller and Inno Setup 6).
+
+**From source** — requires Python 3.12+ and [uv](https://docs.astral.sh/uv/):
 
 **Windows (PowerShell):**
 
