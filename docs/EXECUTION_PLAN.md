@@ -479,6 +479,22 @@ finding is promoted only after reproduction (§3 of `HARDWARE_FINDINGS.md`).
 The Windows `.cmd` batch test double must avoid parentheses inside `if (...)`
 blocks — `cmd` mis-parses `echo (bootloader) ...` there.
 
+### T29/T30 - Device catalog and lock/key anchoring (KU-031 schema half)
+
+**Deliverable:** a strict catalog schema binding device identity to its expected
+trusted AVB key and lock state, and package archives to labels; a validation
+command; a catalog-anchored path for the contextual key check.
+**Accept:** every entry cites a source (uncited entries are refused, per rule 2);
+raw serials have no field; the embedded key must hash to its recorded sha256;
+the anchored key-check prints the citation and is otherwise behavior-identical
+to the `--key` path.
+**Depends on:** T09.
+**Status:** landed (2026-11-27). `cairn.catalog` (`DeviceCatalog`,
+`load_catalog`, strict schema v1), `cairn catalog check`, and `cairn avb
+key-check --catalog …` with `--device-fingerprint`/`--product` selection.
+Remaining work: real catalog data (packages + scrubbed probes), catalog file
+signing, and binding SR-001/003/004/012 to catalog evidence.
+
 ---
 
 ## 5. Release gates

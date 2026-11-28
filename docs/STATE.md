@@ -10,11 +10,13 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the T25 slice: the recovery vault moved to
-format v2 (ADR-029) — PBKDF2-HMAC-SHA256 at 600,000 iterations, pinned inside
-the MACed document, v1 refused — and `docs/REVIEW_BUNDLE.md` now packages
-everything the KU-032 external reviews need. The vault and drill remain
-simulator-only and externally unreviewed (KU-032).
+**Last updated:** 2026-11-27, after the T29/T30 slice: the device catalog
+landed (`cairn.catalog`) — strict, source-cited anchoring records binding a
+device fingerprint to its expected trusted AVB key and lock state, with
+`cairn catalog check` and a `--catalog` anchoring path for `cairn avb
+key-check` (KU-031's schema half). The vault is format v2 (ADR-029) with
+`docs/REVIEW_BUNDLE.md` prepared for KU-032; the vault and drill remain
+simulator-only and externally unreviewed.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -61,6 +63,7 @@ model:
 
 ```text
 src/cairn/
+  catalog/       device catalog: source-cited device/package anchoring records (strict schema)
   core/          tri-state logic, evidence + evidence graph, verification levels, errors
   tools/         bounded subprocess runner, pinned tool manifest
   sparse/        AOSP sparse format parsing/validation, libsparse oracle
@@ -120,7 +123,8 @@ Design notes, in the order the reader should meet them:
 | `cairn avb info IMAGE` | parse VBMeta headers and descriptors | 0/1 |
 | `cairn avb digest IMAGE [--chain NAME=PATH]` | compute the AOSP VBMeta digest | 0/1/2 |
 | `cairn avb verify IMAGE [--key KEY] [--chain NAME=PATH]` | verify signature and, with `--chain`, the chain of trust | 0 valid / 1 invalid / 3 unknown |
-| `cairn avb key-check IMAGE [--key KEY] --lock-state STATE` | contextual expected-key check; inputs are caller-supplied, not device evidence | 0 TRUE / 1 FALSE / 3 UNKNOWN |
+| `cairn avb key-check IMAGE [--key KEY \| --catalog CATALOG (--device-fingerprint HEX \| --product NAME)] --lock-state STATE` | contextual expected-key check; the trusted key is caller-supplied or catalog-anchored (the catalog entry's source is printed), the lock state is caller-supplied, not device evidence | 0 TRUE / 1 FALSE / 3 UNKNOWN |
+| `cairn catalog check CATALOG` | validate a device catalog (strict schema, source citations required, key/sha256 cross-check) and print its entries | 0 / 1 |
 | `cairn rollback read [--fastboot PATH] [--serial SERIAL] [--simulate TRANSCRIPT]` | read vendor-reported stored rollback indexes with one read-only `getvar all` | 0 complete / 2 usage / 3 UNKNOWN |
 | `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device]` | compare package rollback counters with caller-supplied or device-read stored values | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn execute --state SESSION --simulate TRANSCRIPT --token TOKEN --key KEY (--nonce N --device-fingerprint HEX \| nothing for a probed session) [--journal PATH] [--staging-dir DIR]` | execute an approved, safety-gated plan in the transcript simulator only, with a write-ahead journal; real fastboot binaries are refused (ADR-027) | 0 complete / 1 failed / 2 usage / 3 blocked |
@@ -355,15 +359,15 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 611 passed, 6 skipped
+uv run pytest -q               # 622 passed, 6 skipped
 ```
 
 The latest CI run is `46090782794` for the T21/T24 super-oracle slice merged
 through pull request [#10](https://github.com/hassan200503/cairn/pull/10)
 (merge `dc0ed9f`) and is green, including the lpmake differential job (10
 passed, 0 skipped). The T22/T23 capture slice postdates that run; its CI run
-must be green before merge. The 611-test baseline above was confirmed locally
-on the T25 slice.
+must be green before merge. The 622-test baseline above was confirmed locally
+on the T29/T30 slice.
 
 The six local skips are environmental, not gaps in coverage:
 
@@ -485,6 +489,19 @@ push, confirm CI green.
    mid-merge state (SR-010 FALSE; UNKNOWN is journaled as a warning in the
    simulator-only executor). Remaining work: the real-device transport (blocked
    behind T15 and the M6 gate).
+5a. **T29/T30 — Device catalog and lock/key anchoring (landed, schema half).**
+   `cairn.catalog` defines the strict, source-cited catalog schema KU-031
+   asked for: device entries bind `product` + `fingerprint_sha256` (+ optional
+   `serial_sha256`; raw serials have no field) to a trusted AVB public key
+   (embedded and cross-checked against its sha256) and an expected lock state;
+   package entries bind an archive sha256 to a label. Every entry must cite a
+   source or the loader refuses it. `cairn catalog check` validates and prints
+   a catalog; `cairn avb key-check --catalog …` anchors the trusted key from a
+   matched catalog entry and prints its citation. The catalog is
+   caller-supplied anchoring input, never device evidence (ADR-013); the
+   lock state still comes from the caller or a device probe. Remaining work:
+   real packages and scrubbed device probes filling a real catalog, signing
+   the catalog file, and binding SR-001/003/004/012 to catalog evidence.
 6. **T15 — Recovery Kit and the M6 gate (landed, simulator-only).** The threat
    model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
    readiness checks, the encrypted device-bound vault with

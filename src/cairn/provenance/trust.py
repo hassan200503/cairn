@@ -40,6 +40,7 @@ class LockKeyCheck:
     reason: str
     image_key_sha256: str | None = None
     trusted_key_sha256: str | None = None
+    trusted_key_source: str | None = None
     warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -59,6 +60,7 @@ class LockKeyCheck:
             "reason": self.reason,
             "image_key_sha256": self.image_key_sha256,
             "trusted_key_sha256": self.trusted_key_sha256,
+            "trusted_key_source": self.trusted_key_source,
             "warnings": list(self.warnings),
         }
 
@@ -68,25 +70,21 @@ def evaluate_lock_key(
     *,
     lock_state: LockState,
     trusted_key: bytes | None,
+    trusted_key_source: str | None = None,
 ) -> LockKeyCheck:
     """Evaluate an image key against a supplied lock-state context.
 
     A ``TRUE`` result means the signature is valid and the image key matches the
     caller-supplied trusted key under the supplied lock-state context. It never
     means either value was read from the device, and callers must not use it as
-    evidence for SR-013. An invalid signature is ``FALSE``; an unsigned image,
-    a missing trusted key, or an unknown lock state is ``UNKNOWN``. On an
-    unlocked device a mismatch is ``UNKNOWN`` with a warning, because the
-    bootloader would not enforce the key.
+    evidence for SR-013. ``trusted_key_source`` records where the key came from
+    (e.g., a catalog entry's citation); it is provenance bookkeeping, not trust.
+    An invalid signature is ``FALSE``; an unsigned image, a missing trusted key,
+    or an unknown lock state is ``UNKNOWN``. On an unlocked device a mismatch is
+    ``UNKNOWN`` with a warning, because the bootloader would not enforce the key.
     """
     if trusted_key is not None:
         _validate_trusted_key(trusted_key)
-
-    image_key_sha256 = signature.key_sha256 if signature.signed else None
-    trusted_key_sha256 = None if trusted_key is None else hashlib.sha256(trusted_key).hexdigest()
-    key_matches = (
-        None if trusted_key is None else hmac.compare_digest(signature.key_blob, trusted_key)
-    )
 
     def result(
         state: Tri,
@@ -94,14 +92,13 @@ def evaluate_lock_key(
         *,
         warnings: tuple[str, ...] = (),
     ) -> LockKeyCheck:
-        return LockKeyCheck(
-            state=state,
+        return _lock_key_result(
+            signature,
             lock_state=lock_state,
-            key_matches=key_matches,
-            signature_valid=signature.valid,
+            trusted_key=trusted_key,
+            trusted_key_source=trusted_key_source,
+            state=state,
             reason=reason,
-            image_key_sha256=image_key_sha256,
-            trusted_key_sha256=trusted_key_sha256,
             warnings=warnings,
         )
 
@@ -123,6 +120,9 @@ def evaluate_lock_key(
             "device lock state is unknown; key trust cannot be interpreted",
         )
 
+    key_matches = (
+        None if trusted_key is None else hmac.compare_digest(signature.key_blob, trusted_key)
+    )
     if key_matches:
         warnings = (
             ("device is unlocked; key matching is not enforced by lock state",)
@@ -158,3 +158,31 @@ def _validate_trusted_key(trusted_key: bytes) -> None:
         raise AvbError("trusted AVB public key must not be empty")
     if len(trusted_key) > MAX_TRUSTED_KEY_BYTES:
         raise AvbError(f"trusted AVB public key is above the {MAX_TRUSTED_KEY_BYTES}-byte limit")
+
+
+def _lock_key_result(
+    signature: AvbSignature,
+    *,
+    lock_state: LockState,
+    trusted_key: bytes | None,
+    trusted_key_source: str | None,
+    state: Tri,
+    reason: str,
+    warnings: tuple[str, ...] = (),
+) -> LockKeyCheck:
+    image_key_sha256 = signature.key_sha256 if signature.signed else None
+    trusted_key_sha256 = None if trusted_key is None else hashlib.sha256(trusted_key).hexdigest()
+    key_matches = (
+        None if trusted_key is None else hmac.compare_digest(signature.key_blob, trusted_key)
+    )
+    return LockKeyCheck(
+        state=state,
+        lock_state=lock_state,
+        key_matches=key_matches,
+        signature_valid=signature.valid,
+        reason=reason,
+        image_key_sha256=image_key_sha256,
+        trusted_key_sha256=trusted_key_sha256,
+        trusted_key_source=trusted_key_source,
+        warnings=warnings,
+    )
