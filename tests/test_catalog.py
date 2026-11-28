@@ -353,3 +353,100 @@ def test_rollback_check_requires_a_catalog_entry_selector(tmp_path: Path) -> Non
         ]
     )
     assert exit_code == EXIT_USAGE
+
+
+def _key_file(tmp_path: Path) -> Path:
+    key_path = tmp_path / "catalog.key"
+    key_path.write_bytes(b"k" * 32)
+    return key_path
+
+
+def test_catalog_sign_and_verify_roundtrip(tmp_path: Path) -> None:
+    catalog_path = _catalog_file(tmp_path)
+    key = _key_file(tmp_path)
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(key)]) == EXIT_OK
+    assert main(["catalog", "verify", str(catalog_path), "--key", str(key)]) == EXIT_OK
+
+
+def test_catalog_verify_refuses_a_tampered_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog_path = _catalog_file(tmp_path)
+    key = _key_file(tmp_path)
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(key)]) == EXIT_OK
+    document = json.loads(catalog_path.read_text(encoding="utf-8"))
+    document["devices"][0]["notes"] = "tampered"
+    catalog_path.write_text(json.dumps(document), encoding="utf-8")
+    assert main(["catalog", "verify", str(catalog_path), "--key", str(key)]) == EXIT_FAILED
+    assert "does not match" in capsys.readouterr().err
+
+
+def test_rollback_check_refuses_a_bad_catalog_signature(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog_path = _catalog_file(tmp_path)
+    key = _key_file(tmp_path)
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(key)]) == EXIT_OK
+    sig_path = tmp_path / "wrong.sig"
+    sig_path.write_text("0" * 64, encoding="ascii")
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(catalog_path),
+            "--catalog-key",
+            str(key),
+            "--catalog-signature",
+            str(sig_path),
+            "--product",
+            "shiba",
+        ]
+    )
+    assert exit_code == EXIT_USAGE
+    assert "does not match" in capsys.readouterr().err
+
+
+def test_avb_key_check_verifies_the_catalog_signature(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog_path = _catalog_file(tmp_path)
+    key = _key_file(tmp_path)
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(key)]) == EXIT_OK
+    exit_code = main(
+        [
+            "avb",
+            "key-check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(catalog_path),
+            "--catalog-key",
+            str(key),
+            "--catalog-signature",
+            str(tmp_path / "catalog.json.sig"),
+            "--product",
+            "shiba",
+            "--lock-state",
+            "locked",
+        ]
+    )
+    assert exit_code == EXIT_OK
+    assert "key trust: TRUE" in capsys.readouterr().out
+
+
+def test_rollback_check_refuses_key_without_signature(tmp_path: Path) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(_catalog_file(tmp_path)),
+            "--catalog-key",
+            str(_key_file(tmp_path)),
+            "--product",
+            "shiba",
+        ]
+    )
+    assert exit_code == EXIT_USAGE

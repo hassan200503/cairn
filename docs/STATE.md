@@ -10,19 +10,16 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the v0.2.0 release and the catalog
-rollback-bounds slice: the catalog is schema v2 — a device entry may carry
-cited per-location `rollback_bounds`, the rollback oracle consults a bound only
-when the stored value is unavailable (maximum proves safety, minimum proves a
-downgrade, inconclusive stays UNKNOWN, a stored read outranks a bound), and the
-bounds are wired into `cairn rollback check --catalog` and `cairn wizard
---catalog` with the entry's source printed as the citation. v0.2.0 added the
-installer scripts, a README overhaul with real-output screenshots, and a tagged
-GitHub release. The T29/T30 device catalog (`cairn.catalog`) with `cairn
-catalog check`, `cairn avb key-check --catalog`, and `cairn wizard --catalog`
-anchoring landed just before; the vault is format v2 (ADR-029) with
-`docs/REVIEW_BUNDLE.md` prepared for KU-032. The vault and drill remain
-simulator-only and externally unreviewed.
+**Last updated:** 2026-11-27, after the catalog signing slice (ADR-030):
+`cairn catalog sign` writes a detached HMAC-SHA256 signature of the exact
+catalog file bytes, `cairn catalog verify` re-checks schema and signature, and
+the anchoring paths (`avb key-check --catalog`, `rollback check --catalog`,
+`wizard --catalog`) accept `--catalog-key`/`--catalog-signature` and refuse a
+mismatched or half-supplied pair. Just before: catalog schema v2 rollback
+bounds wired into `cairn rollback check --catalog` and `cairn wizard
+--catalog`, and the v0.2.0 release (installer scripts, README overhaul, tagged
+GitHub release). The catalog remains simulator-side anchoring input and the
+vault and drill remain simulator-only and externally unreviewed.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -131,6 +128,8 @@ Design notes, in the order the reader should meet them:
 | `cairn avb verify IMAGE [--key KEY] [--chain NAME=PATH]` | verify signature and, with `--chain`, the chain of trust | 0 valid / 1 invalid / 3 unknown |
 | `cairn avb key-check IMAGE [--key KEY \| --catalog CATALOG (--device-fingerprint HEX \| --product NAME)] --lock-state STATE` | contextual expected-key check; the trusted key is caller-supplied or catalog-anchored (the catalog entry's source is printed), the lock state is caller-supplied, not device evidence | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn catalog check CATALOG` | validate a device catalog (strict schema, source citations required, key/sha256 cross-check) and print its entries | 0 / 1 |
+| `cairn catalog sign CATALOG --key KEYFILE [--signature SIG]` | write a detached HMAC-SHA256 signature of the exact catalog file bytes (ADR-030) | 0 / 1 / 2 |
+| `cairn catalog verify CATALOG --key KEYFILE [--signature SIG]` | verify a catalog's schema and detached signature | 0 / 1 / 2 |
 | `cairn rollback read [--fastboot PATH] [--serial SERIAL] [--simulate TRANSCRIPT]` | read vendor-reported stored rollback indexes with one read-only `getvar all` | 0 complete / 2 usage / 3 UNKNOWN |
 | `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device] [--catalog CATALOG (--device-fingerprint HEX \| --product NAME)]` | compare package rollback counters with caller-supplied, device-read, or catalog-bounded stored values; the catalog entry's source is printed as the citation | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn execute --state SESSION --simulate TRANSCRIPT --token TOKEN --key KEY (--nonce N --device-fingerprint HEX \| nothing for a probed session) [--journal PATH] [--staging-dir DIR]` | execute an approved, safety-gated plan in the transcript simulator only, with a write-ahead journal; real fastboot binaries are refused (ADR-027) | 0 complete / 1 failed / 2 usage / 3 blocked |
@@ -365,14 +364,14 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 640 passed, 6 skipped
+uv run pytest -q               # 645 passed, 6 skipped
 ```
 
-The latest CI run is the v0.2.0 packaging slice (pull request
-[#16](https://github.com/hassan200503/cairn/pull/16), merge `1170358`) and is
-green across all seven jobs. The catalog rollback-bounds slice postdates that
-run; its CI run must be green before merge. The 640-test baseline above was
-confirmed locally on the catalog rollback-bounds slice.
+The latest merged CI run is the catalog rollback-bounds slice (pull request
+[#17](https://github.com/hassan200503/cairn/pull/17), merge `4e042c8`), green
+across all seven jobs. The catalog signing slice postdates that run; its CI run
+must be green before merge. The 645-test baseline above was confirmed locally
+on the catalog signing slice.
 
 The six local skips are environmental, not gaps in coverage:
 
@@ -509,9 +508,11 @@ push, confirm CI green.
    device evidence (ADR-013); the lock state still comes from the caller or a
    device probe. The catalog rollback-bounds slice bound SR-004's stored-value
    question to catalog evidence: a cited per-location bound proves safety or a
-   downgrade when the device read is unavailable. Remaining work: real packages
-   and scrubbed device probes filling a real catalog, catalog file signing, and
-   binding SR-001/003/012 to catalog evidence.
+   downgrade when the device read is unavailable. The catalog signing slice
+   (ADR-030) added detached HMAC-SHA256 signatures over exact catalog bytes,
+   verified on every anchoring path when the key/signature pair is supplied.
+   Remaining work: real packages and scrubbed device probes filling a real
+   catalog, and binding SR-001/003/012 to catalog evidence.
 6. **T15 — Recovery Kit and the M6 gate (landed, simulator-only).** The threat
    model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
    readiness checks, the encrypted device-bound vault with

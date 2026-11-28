@@ -37,7 +37,15 @@ from cairn.approval import (
     verify_approval,
     write_approval_key,
 )
-from cairn.catalog import CatalogError, DeviceEntry, load_catalog
+from cairn.catalog import (
+    MAX_HMAC_KEY_BYTES,
+    MIN_HMAC_KEY_BYTES,
+    CatalogError,
+    DeviceEntry,
+    load_catalog,
+    load_catalog_verified,
+    sign_catalog_bytes,
+)
 from cairn.core.errors import ToolError
 from cairn.core.evidence import EvidenceSource
 from cairn.core.tristate import Tri
@@ -445,6 +453,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="CATALOG",
         help="device catalog anchoring the expected AVB key (requires --device-fingerprint)",
+    )
+    wizard.add_argument(
+        "--catalog-key",
+        type=Path,
+        metavar="KEYFILE",
+        help="HMAC key file for --catalog-signature verification",
+    )
+    wizard.add_argument(
+        "--catalog-signature",
+        type=Path,
+        metavar="SIGFILE",
+        help="detached HMAC-SHA256 signature of the catalog file",
     )
     wizard.add_argument(
         "--lock-state",
@@ -912,6 +932,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="device catalog supplying the trusted key for the matched device",
     )
     avb_key_check.add_argument(
+        "--catalog-key",
+        type=Path,
+        metavar="KEYFILE",
+        help="HMAC key file for --catalog-signature verification",
+    )
+    avb_key_check.add_argument(
+        "--catalog-signature",
+        type=Path,
+        metavar="SIGFILE",
+        help="detached HMAC-SHA256 signature of the catalog file",
+    )
+    avb_key_check.add_argument(
         "--device-fingerprint",
         metavar="HEX64",
         help="device fingerprint sha256 used to select the catalog entry",
@@ -947,6 +979,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="emit machine-readable output",
+    )
+    catalog_sign = catalog_sub.add_parser(
+        "sign",
+        help="write a detached HMAC-SHA256 signature for a catalog file",
+    )
+    catalog_sign.add_argument("catalog", type=Path, help="catalog JSON file")
+    catalog_sign.add_argument("--key", type=Path, required=True, help="key file (32..4096 bytes)")
+    catalog_sign.add_argument(
+        "--signature",
+        type=Path,
+        help="signature output path (default: <catalog>.sig)",
+    )
+    catalog_verify = catalog_sub.add_parser(
+        "verify",
+        help="verify a catalog's schema and its detached HMAC-SHA256 signature",
+    )
+    catalog_verify.add_argument("catalog", type=Path, help="catalog JSON file")
+    catalog_verify.add_argument("--key", type=Path, required=True, help="key file (32..4096 bytes)")
+    catalog_verify.add_argument(
+        "--signature",
+        type=Path,
+        help="signature file (default: <catalog>.sig)",
     )
 
     rollback = subparsers.add_parser(
@@ -1002,6 +1056,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--catalog",
         type=Path,
         help="device catalog providing cited rollback bounds for the stored value",
+    )
+    rollback_check.add_argument(
+        "--catalog-key",
+        type=Path,
+        help="HMAC key file for --catalog-signature verification",
+    )
+    rollback_check.add_argument(
+        "--catalog-signature",
+        type=Path,
+        help="detached HMAC-SHA256 signature of the catalog file",
     )
     rollback_check.add_argument(
         "--device-fingerprint",
@@ -1645,6 +1709,8 @@ def _run_wizard(args: argparse.Namespace) -> int:
         chain=chain,
         key=args.key,
         catalog=args.catalog,
+        catalog_key=args.catalog_key,
+        catalog_signature=args.catalog_signature,
         lock_state=args.lock_state,
         stored=stored,
         slot_policy=SlotPolicy(args.slot),
@@ -2815,13 +2881,53 @@ def _run_avb_key_check(args: argparse.Namespace) -> int:
     return _exit_code_for_tri(result.state)
 
 
+def _read_catalog_key(path: Path | None, command: str) -> bytes | None:
+    """Read an HMAC key file for catalog-signature verification."""
+    if path is None:
+        return None
+    try:
+        key = path.read_bytes()
+    except OSError as exc:
+        print(f"{command}: cannot read key file {path}: {exc}", file=sys.stderr)
+        return None
+    if not MIN_HMAC_KEY_BYTES <= len(key) <= MAX_HMAC_KEY_BYTES:
+        print(
+            f"{command}: catalog key must be {MIN_HMAC_KEY_BYTES}..{MAX_HMAC_KEY_BYTES} bytes",
+            file=sys.stderr,
+        )
+        return None
+    return key
+
+
+def _catalog_signature_text(args: argparse.Namespace, command: str) -> str | None:
+    signature_path: Path | None = getattr(args, "catalog_signature", None)
+    key = _read_catalog_key(getattr(args, "catalog_key", None), command)
+    if (key is None) != (signature_path is None):
+        print(
+            f"{command}: --catalog-key and --catalog-signature must be used together",
+            file=sys.stderr,
+        )
+        return None
+    if signature_path is None:
+        return None
+    try:
+        return signature_path.read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        print(f"{command}: cannot read signature {signature_path}: {exc}", file=sys.stderr)
+        return None
+
+
 def _resolve_catalog_device(args: argparse.Namespace, command: str) -> DeviceEntry | None:
     """Select the catalog device entry named by --device-fingerprint or --product."""
     catalog_path: Path | None = getattr(args, "catalog", None)
     if catalog_path is None:
         return None
+    signature = _catalog_signature_text(args, command)
+    if getattr(args, "catalog_key", None) is not None and signature is None:
+        return None
+    key = _read_catalog_key(getattr(args, "catalog_key", None), command)
     try:
-        catalog = load_catalog(catalog_path)
+        catalog = load_catalog_verified(catalog_path, hmac_key=key, signature=signature)
     except CatalogError as exc:
         print(f"{command}: {exc}", file=sys.stderr)
         return None
@@ -2846,8 +2952,13 @@ def _resolve_catalog_device(args: argparse.Namespace, command: str) -> DeviceEnt
 
 
 def _run_catalog(args: argparse.Namespace) -> int:
-    if getattr(args, "catalog_command", None) != "check":
-        print("cairn catalog: choose 'check'", file=sys.stderr)
+    command_name = getattr(args, "catalog_command", None)
+    if command_name == "sign":
+        return _run_catalog_sign(args)
+    if command_name == "verify":
+        return _run_catalog_verify(args)
+    if command_name != "check":
+        print("cairn catalog: choose 'check', 'sign', or 'verify'", file=sys.stderr)
         return EXIT_USAGE
     try:
         catalog = load_catalog(args.catalog)
@@ -2897,6 +3008,51 @@ def _run_catalog(args: argparse.Namespace) -> int:
     print(f"packages: {len(catalog.packages)}")
     for package in catalog.packages:
         print(f"  {package.archive_sha256[:12]}… {package.label} (source: {package.source})")
+    return EXIT_OK
+
+
+def _run_catalog_sign(args: argparse.Namespace) -> int:
+    key = _read_catalog_key(args.key, "cairn catalog sign")
+    if key is None:
+        return EXIT_USAGE
+    try:
+        data = args.catalog.read_bytes()
+    except OSError as exc:
+        print(f"cairn catalog sign: cannot read {args.catalog}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    signature_path = (
+        args.signature if args.signature is not None else Path(str(args.catalog) + ".sig")
+    )
+    try:
+        signature_path.write_text(sign_catalog_bytes(data, key) + "\n", encoding="ascii")
+    except OSError as exc:
+        print(f"cairn catalog sign: cannot write {signature_path}: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"signed: {args.catalog}")
+    print(f"signature: {signature_path}")
+    print("note: the signature covers the exact file bytes; any edit invalidates it")
+    return EXIT_OK
+
+
+def _run_catalog_verify(args: argparse.Namespace) -> int:
+    key = _read_catalog_key(args.key, "cairn catalog verify")
+    if key is None:
+        return EXIT_USAGE
+    signature_path = (
+        args.signature if args.signature is not None else Path(str(args.catalog) + ".sig")
+    )
+    try:
+        signature = signature_path.read_text(encoding="ascii").strip()
+        load_catalog_verified(args.catalog, hmac_key=key, signature=signature)
+    except CatalogError as exc:
+        print(f"cairn catalog verify: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    except OSError as exc:
+        print(
+            f"cairn catalog verify: cannot read signature {signature_path}: {exc}", file=sys.stderr
+        )
+        return EXIT_FAILED
+    print(f"verified: {args.catalog} matches its signature (HMAC-SHA256)")
     return EXIT_OK
 
 

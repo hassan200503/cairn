@@ -8,6 +8,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Catalog file signing (ADR-030): `cairn catalog sign` writes a detached
+  HMAC-SHA256 signature of the exact file bytes; `cairn catalog verify`
+  re-checks schema and signature; `avb key-check --catalog`, `rollback check
+  --catalog`, and `wizard --catalog` accept `--catalog-key`/
+  `--catalog-signature` and refuse a mismatched or half-supplied pair.
 - Catalog rollback bounds (catalog schema v2): a device entry may carry cited
   per-location `rollback_bounds`; the rollback oracle consults a bound only when
   the stored value is unavailable (a maximum proves safety, a minimum proves a

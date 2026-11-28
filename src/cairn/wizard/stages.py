@@ -8,6 +8,7 @@ resume policy, and persistence. A stage never writes to a device.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -97,6 +98,8 @@ class WizardOptions:
     chain: Mapping[str, Path] = field(default_factory=dict)
     key: Path | None = None
     catalog: Path | None = None
+    catalog_key: Path | None = None
+    catalog_signature: Path | None = None
     lock_state: str | None = None
     stored: Mapping[int, int] = field(default_factory=dict)
     slot_policy: SlotPolicy = SlotPolicy.CURRENT
@@ -327,6 +330,8 @@ def _catalog_entry_for_run(run: WizardRun) -> tuple[DeviceEntry | None, str | No
 
     The entry is selected by the caller-supplied device fingerprint or, when
     the device was probed, by the probed fingerprint from the session device.
+    A caller-supplied detached signature is verified against the exact file
+    bytes before anything from the catalog is used.
     """
     options = run.options
     if options.catalog is None:
@@ -338,6 +343,17 @@ def _catalog_entry_for_run(run: WizardRun) -> tuple[DeviceEntry | None, str | No
         return None, None
     catalog_bytes = options.catalog.read_bytes()
     catalog_sha256 = hashlib.sha256(catalog_bytes).hexdigest()
+    hmac_key: bytes | None = None
+    signature: str | None = None
+    if options.catalog_key is not None:
+        hmac_key = options.catalog_key.read_bytes()
+        if options.catalog_signature is None:
+            raise CatalogError("--catalog-signature is required with --catalog-key")
+        signature = options.catalog_signature.read_text(encoding="ascii").strip()
+    if hmac_key is not None and signature is not None:
+        expected = hmac.new(hmac_key, catalog_bytes, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature.lower()):
+            raise CatalogError("catalog signature does not match its bytes")
     catalog = parse_catalog(json.loads(catalog_bytes.decode("utf-8")))
     return catalog.device_by_fingerprint(fingerprint), catalog_sha256
 
