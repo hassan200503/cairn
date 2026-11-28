@@ -363,14 +363,15 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 668 passed, 6 skipped
+uv run pytest -q               # 670 passed, 6 skipped
 ```
 
 The latest merged CI run is the catalog rollback-bounds slice (pull request
 [#17](https://github.com/hassan200503/cairn/pull/17), merge `4e042c8`), green
 across all seven jobs. The catalog signing and local UI slices postdate that
-run; their CI run must be green before merge. The 668-test baseline above was
-confirmed locally on the UI slice (23 new UI tests in `tests/test_ui.py`).
+run; later slices' CI runs must be green before merge. The 670-test baseline
+above was confirmed locally on the catalog key-rotation slice (rotation
+semantics tests in `tests/test_catalog.py`, KU-018).
 
 The six local skips are environmental, not gaps in coverage:
 
