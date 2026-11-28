@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="752.0" height="702" viewBox="0 0 752.0 702" font-family="Consolas, Menlo, monospace">
+<rect width="752.0" height="702" rx="10" fill="#21252b"/>
+<rect width="752.0" height="28" rx="10" fill="#323842"/>
+<rect y="18" width="752.0" height="10" fill="#323842"/>
+<circle cx="18" cy="14" r="6" fill="#ff5f57"/>
+<circle cx="36" cy="14" r="6" fill="#febc2e"/>
+<circle cx="54" cy="14" r="6" fill="#28c840"/>
+<text x="376.0" y="18" text-anchor="middle" fill="#9da5b4" font-size="12" font-family="Segoe UI, sans-serif">cairn plan — vendor-order dry run + safety report</text>
+<text x="16" y="40" fill="#d7dae0" font-size="13" xml:space="preserve">plan: 82fdfa81ae59acf54cc1d9b4ae39ca86ac9eeeaca4dc37ae38bb1d1688dccff3</text>
+<text x="16" y="57" fill="#d7dae0" font-size="13" xml:space="preserve">package sha256: f8d203a7153bab6dc29842ec62ad8f43ad582e7a5917277cd4fadb57d6e6792b</text>
+<text x="16" y="74" fill="#4ec964" font-size="13" xml:space="preserve">provenance: TRUE</text>
+<text x="16" y="91" fill="#abb2bf" font-size="13" xml:space="preserve">  provenance: archive and 2 entry hashes match the local index</text>
+<text x="16" y="108" fill="#d7dae0" font-size="13" xml:space="preserve">options: wipe=no, slot=current, retrofit_force=no</text>
+<text x="16" y="125" fill="#4ec964" font-size="13" xml:space="preserve">structurally executable: TRUE</text>
+<text x="16" y="142" fill="#e5c07b" font-size="13" xml:space="preserve">safety verdict: UNKNOWN</text>
+<text x="16" y="159" fill="#e06c75" font-size="13" xml:space="preserve">safety can proceed: FALSE</text>
+<text x="16" y="176" fill="#d7dae0" font-size="13" xml:space="preserve">safety evidence snapshot: e69759f852e9aa1bdf7cc208e1125c2b09ced37adca360c6eaea7f6dc644b367</text>
+<text x="16" y="193" fill="#d7dae0" font-size="13" xml:space="preserve">safety blocking:</text>
+<text x="16" y="210" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-001</text>
+<text x="16" y="227" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-003</text>
+<text x="16" y="244" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-004</text>
+<text x="16" y="261" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-008</text>
+<text x="16" y="278" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-009</text>
+<text x="16" y="295" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-010</text>
+<text x="16" y="312" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-011</text>
+<text x="16" y="329" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-012</text>
+<text x="16" y="346" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-013</text>
+<text x="16" y="363" fill="#e5c07b" font-size="13" xml:space="preserve">  - SR-018</text>
+<text x="16" y="380" fill="#d7dae0" font-size="13" xml:space="preserve">safety rules:</text>
+<text x="16" y="397" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-001: UNKNOWN - device or package identity is unavailable</text>
+<text x="16" y="414" fill="#4ec964" font-size="13" xml:space="preserve">  SR-002: TRUE - archive and 2 entry hashes match the local index</text>
+<text x="16" y="431" fill="#e5c07b" font-size="13" xml:space="preserve">     warning: a local hash index match is not a signature or authenticity check</text>
+<text x="16" y="448" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-003: UNKNOWN - AVB chain verification is unavailable</text>
+<text x="16" y="465" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-004: UNKNOWN - rollback-index comparison is unavailable</text>
+<text x="16" y="482" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-008: UNKNOWN - recovery readiness was not evaluated</text>
+<text x="16" y="499" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-009: UNKNOWN - no vault backup was supplied for the wipe/relock gate</text>
+<text x="16" y="516" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-010: UNKNOWN - snapshot-update-status was not read; the merge state is unknown</text>
+<text x="16" y="533" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-011: UNKNOWN - dynamic-partition state was not read; the correct flash mode is unknown</text>
+<text x="16" y="550" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-012: UNKNOWN - no flash-tool report is available</text>
+<text x="16" y="567" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-013: UNKNOWN - bootloader lock state is unavailable</text>
+<text x="16" y="584" fill="#e5c07b" font-size="13" xml:space="preserve">  SR-018: UNKNOWN - approval binding is unavailable</text>
+<text x="16" y="601" fill="#e06c75" font-size="13" xml:space="preserve">executable: FALSE</text>
+<text x="16" y="618" fill="#d7dae0" font-size="13" xml:space="preserve">steps: 1</text>
+<text x="16" y="635" fill="#d7dae0" font-size="13" xml:space="preserve">  1. flash boot boot.img (line 2)</text>
+<text x="16" y="652" fill="#d7dae0" font-size="13" xml:space="preserve">fallback: stop-and-reprobe - On any failure, stop; do not retry blindly. Reboot to bootloader and re</text>
+<text x="16" y="669" fill="#d7dae0" font-size="13" xml:space="preserve">read-only dry run; no device writes</text>
+</svg>

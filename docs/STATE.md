@@ -10,14 +10,15 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the T29/T30 slice: the device catalog
-landed (`cairn.catalog`) — strict, source-cited anchoring records binding a
-device fingerprint to its expected trusted AVB key and lock state — with
-`cairn catalog check`, a `--catalog` anchoring path for `cairn avb key-check`,
-and `cairn wizard --catalog` anchoring the AVB stage (catalog sha256 and
-citation bound into the stage evidence). The vault is format v2 (ADR-029) with
-`docs/REVIEW_BUNDLE.md` prepared for KU-032; the vault and drill remain
-simulator-only and externally unreviewed.
+**Last updated:** 2026-11-27, release packaging slice: version 0.2.0,
+`install.ps1` / `install.sh` installer scripts (isolated `uv tool` install), a
+full README overhaul with real-output screenshots under `docs/screenshots/`, a
+`[0.2.0]` CHANGELOG section, and a GitHub release with built wheel and sdist.
+No code behavior changed in this slice. The T29/T30 device catalog
+(`cairn.catalog`) with `cairn catalog check`, `cairn avb key-check --catalog`,
+and `cairn wizard --catalog` anchoring landed just before it; the vault is
+format v2 (ADR-029) with `docs/REVIEW_BUNDLE.md` prepared for KU-032. The vault
+and drill remain simulator-only and externally unreviewed.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.

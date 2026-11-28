@@ -36,7 +36,6 @@ def session_exit_code(session: WizardSession) -> int:
 def render_session(session: WizardSession) -> str:
     lines = [
         f"cairn wizard session: {session.session_id}",
-        f"state file: {session.package_path} -> {session.index_path}",
         f"package: {session.package_path}",
         f"index: {session.index_path}",
         f"outcome: {_OUTCOME_LABELS[session.outcome]}",
