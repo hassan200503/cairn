@@ -12,9 +12,10 @@ does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
 **Last updated:** 2026-11-27, after the T29/T30 slice: the device catalog
 landed (`cairn.catalog`) — strict, source-cited anchoring records binding a
-device fingerprint to its expected trusted AVB key and lock state, with
-`cairn catalog check` and a `--catalog` anchoring path for `cairn avb
-key-check` (KU-031's schema half). The vault is format v2 (ADR-029) with
+device fingerprint to its expected trusted AVB key and lock state — with
+`cairn catalog check`, a `--catalog` anchoring path for `cairn avb key-check`,
+and `cairn wizard --catalog` anchoring the AVB stage (catalog sha256 and
+citation bound into the stage evidence). The vault is format v2 (ADR-029) with
 `docs/REVIEW_BUNDLE.md` prepared for KU-032; the vault and drill remain
 simulator-only and externally unreviewed.
 
@@ -114,7 +115,7 @@ Design notes, in the order the reader should meet them:
 | `cairn inspect PACKAGE` | read-only factory/OTA zip inspection, no extraction | 0/1 |
 | `cairn provenance PACKAGE --index INDEX` | match a package against a local hash index | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn plan PACKAGE --index INDEX` | read-only vendor-order dry run plus SR-001/002/003/004/012/013 safety report | 0 both structural and safety gates pass / 1 error / 3 blocked |
-| `cairn wizard PACKAGE --index INDEX --state SESSION [--resume \| --force]` | resumable, read-only preflight: doctor, inspect, provenance, probe, AVB, rollback, plan, and optional approval verification | 0 only when every supplied stage and post-approval gate passes / 1 failed / 3 blocked or simulated |
+| `cairn wizard PACKAGE --index INDEX --state SESSION [--resume \| --force] [--catalog CATALOG]` | resumable, read-only preflight: doctor, inspect, provenance, probe, AVB, rollback, plan, and optional approval verification; with `--catalog` the AVB stage anchors the expected key from the entry matching the device fingerprint and binds the catalog sha256 and citation into the stage evidence | 0 only when every supplied stage and post-approval gate passes / 1 failed / 3 blocked or simulated |
 | `cairn approval keygen --out KEY` | create a 32-byte approval consistency key (never a device write) | 0/1 |
 | `cairn approval issue PACKAGE --index INDEX --key KEY --operator OP --reason TEXT --nonce NONCE (--fastboot PATH [--serial S] \| --device-fingerprint HEX)` | issue an HMAC-signed approval token after the pre-approval gate passes | 0/1/2/3 |
 | `cairn approval verify TOKEN PACKAGE --index INDEX --key KEY --nonce NONCE (--fastboot PATH \| --device-fingerprint HEX)` | compare a token against the current plan, evidence snapshot, package, device, and tools | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
@@ -359,14 +360,14 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 622 passed, 6 skipped
+uv run pytest -q               # 627 passed, 6 skipped
 ```
 
 The latest CI run is `46090782794` for the T21/T24 super-oracle slice merged
 through pull request [#10](https://github.com/hassan200503/cairn/pull/10)
 (merge `dc0ed9f`) and is green, including the lpmake differential job (10
 passed, 0 skipped). The T22/T23 capture slice postdates that run; its CI run
-must be green before merge. The 622-test baseline above was confirmed locally
+must be green before merge. The 627-test baseline above was confirmed locally
 on the T29/T30 slice.
 
 The six local skips are environmental, not gaps in coverage:
@@ -497,11 +498,14 @@ push, confirm CI green.
    package entries bind an archive sha256 to a label. Every entry must cite a
    source or the loader refuses it. `cairn catalog check` validates and prints
    a catalog; `cairn avb key-check --catalog …` anchors the trusted key from a
-   matched catalog entry and prints its citation. The catalog is
-   caller-supplied anchoring input, never device evidence (ADR-013); the
-   lock state still comes from the caller or a device probe. Remaining work:
-   real packages and scrubbed device probes filling a real catalog, signing
-   the catalog file, and binding SR-001/003/004/012 to catalog evidence.
+   matched catalog entry and prints its citation; `cairn wizard --catalog`
+   anchors the AVB stage the same way and binds the catalog sha256 and
+   citation into the stage payload (which the approval bundle's evidence
+   snapshot covers). The catalog is caller-supplied anchoring input, never
+   device evidence (ADR-013); the lock state still comes from the caller or a
+   device probe. Remaining work: real packages and scrubbed device probes
+   filling a real catalog, catalog file signing, and binding
+   SR-001/003/004/012 to catalog evidence.
 6. **T15 — Recovery Kit and the M6 gate (landed, simulator-only).** The threat
    model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
    readiness checks, the encrypted device-bound vault with

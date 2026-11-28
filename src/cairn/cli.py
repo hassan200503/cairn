@@ -441,6 +441,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="expected raw AVB public key",
     )
     wizard.add_argument(
+        "--catalog",
+        type=Path,
+        metavar="CATALOG",
+        help="device catalog anchoring the expected AVB key (requires --device-fingerprint)",
+    )
+    wizard.add_argument(
         "--lock-state",
         choices=("locked", "unlocked", "unknown"),
         help="caller lock state; not device evidence and does not satisfy SR-013",
@@ -1625,6 +1631,7 @@ def _run_wizard(args: argparse.Namespace) -> int:
         vbmeta=args.vbmeta,
         chain=chain,
         key=args.key,
+        catalog=args.catalog,
         lock_state=args.lock_state,
         stored=stored,
         slot_policy=SlotPolicy(args.slot),

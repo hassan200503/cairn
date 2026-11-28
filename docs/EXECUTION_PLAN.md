@@ -492,8 +492,12 @@ to the `--key` path.
 **Status:** landed (2026-11-27). `cairn.catalog` (`DeviceCatalog`,
 `load_catalog`, strict schema v1), `cairn catalog check`, and `cairn avb
 key-check --catalog …` with `--device-fingerprint`/`--product` selection.
-Remaining work: real catalog data (packages + scrubbed probes), catalog file
-signing, and binding SR-001/003/004/012 to catalog evidence.
+`cairn wizard --catalog` anchors the AVB stage the same way: the entry is
+selected by the caller fingerprint or the probed device record, and the
+catalog sha256 and the entry's citation are bound into the stage payload that
+the approval bundle covers. Remaining work: real catalog data (packages +
+scrubbed probes), catalog file signing, and binding SR-001/003/004/012 to
+catalog evidence.
 
 ---
 

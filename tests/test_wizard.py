@@ -309,3 +309,109 @@ def test_hash_index_helper_is_equivalent_to_manifest_verification(tmp_path) -> N
         manifest.archive_sha256,
         {entry.name: entry.sha256 for entry in manifest.entries},
     ) == verify_manifest(index, manifest)
+
+
+def _catalog_file(tmp_path, fingerprint: str, *, with_key: bool = True) -> Path:
+    import base64
+
+    from cairn.catalog import CATALOG_SCHEMA_VERSION
+
+    key = (Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.avbpubkey").read_bytes()
+    document = {
+        "kind": "cairn.catalog",
+        "schema_version": CATALOG_SCHEMA_VERSION,
+        "devices": [
+            {
+                "product": "pixel8",
+                "fingerprint_sha256": fingerprint,
+                "serial_sha256": None,
+                "trusted_key_sha256": hashlib.sha256(key).hexdigest(),
+                "trusted_key_b64": base64.b64encode(key).decode("ascii") if with_key else None,
+                "expected_lock_state": "locked",
+                "source": "HF-0001",
+                "notes": None,
+            }
+        ],
+        "packages": [],
+    }
+    path = tmp_path / "catalog.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def _avb_run(tmp_path: Path, *, catalog: Path | None, fingerprint: str | None):
+    from cairn.wizard.stages import WizardOptions, WizardRun, stage_avb
+
+    options = WizardOptions(
+        package=tmp_path / "factory.zip",
+        index=tmp_path / "index.json",
+        state=tmp_path / "wizard.json",
+        device_fingerprint=fingerprint,
+        vbmeta=Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.img",
+        catalog=catalog,
+    )
+    run = WizardRun(options=options)
+    return run, stage_avb(run, now=datetime.now(UTC))
+
+
+def test_wizard_avb_stage_anchors_the_key_from_a_catalog(tmp_path) -> None:
+    fingerprint = _hex("device")
+    catalog = _catalog_file(tmp_path, fingerprint)
+    _run, result = _avb_run(tmp_path, catalog=catalog, fingerprint=fingerprint)
+
+    assert result.outcome is StageOutcome.PASS
+    assert result.payload["trusted_key_source"] == "HF-0001"
+    assert result.payload["catalog_sha256"] == hashlib.sha256(catalog.read_bytes()).hexdigest()
+    assert any("catalog entry" in w for w in result.warnings)
+
+
+def test_wizard_avb_stage_anchors_by_the_probed_device_fingerprint(tmp_path) -> None:
+    from cairn.wizard.stages import WizardOptions, WizardRun, stage_avb
+
+    fingerprint = _hex("probed-device")
+    options = WizardOptions(
+        package=tmp_path / "factory.zip",
+        index=tmp_path / "index.json",
+        state=tmp_path / "wizard.json",
+        vbmeta=Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.img",
+        catalog=_catalog_file(tmp_path, fingerprint),
+    )
+    run = WizardRun(options=options)
+    run.device = DeviceRecord(
+        source="probed",
+        simulated=False,
+        nonce="a" * 32,
+        fingerprint_sha256=fingerprint,
+        probed_at=datetime.now(UTC),
+        max_age_s=600,
+    )
+    result = stage_avb(run, now=datetime.now(UTC))
+    assert result.outcome is StageOutcome.PASS
+    assert result.payload["trusted_key_source"] == "HF-0001"
+
+
+def test_wizard_avb_stage_warns_when_the_catalog_entry_has_no_key(tmp_path) -> None:
+    fingerprint = _hex("device")
+    catalog = _catalog_file(tmp_path, fingerprint, with_key=False)
+    _run, result = _avb_run(tmp_path, catalog=catalog, fingerprint=fingerprint)
+
+    assert result.outcome is StageOutcome.BLOCKED
+    assert any("no key was anchored" in w for w in result.warnings)
+
+
+def test_wizard_avb_stage_warns_when_the_catalog_has_no_matching_device(tmp_path) -> None:
+    catalog = _catalog_file(tmp_path, _hex("another-device"))
+    _run, result = _avb_run(tmp_path, catalog=catalog, fingerprint=_hex("device"))
+
+    assert result.outcome is StageOutcome.BLOCKED
+    assert result.payload["catalog_sha256"] == hashlib.sha256(catalog.read_bytes()).hexdigest()
+    assert any("no key was anchored" in w for w in result.warnings)
+
+
+def test_wizard_avb_stage_ignores_the_catalog_without_a_fingerprint(tmp_path) -> None:
+    catalog = _catalog_file(tmp_path, _hex("device"))
+    _run, result = _avb_run(tmp_path, catalog=catalog, fingerprint=None)
+
+    assert result.outcome is StageOutcome.BLOCKED
+    assert "trusted_key_source" not in result.payload
+    assert "catalog_sha256" not in result.payload

@@ -31,6 +31,7 @@ from cairn.approval import (
     new_nonce,
     verify_approval,
 )
+from cairn.catalog import CatalogError, parse_catalog
 from cairn.core.evidence import Evidence, EvidenceSource
 from cairn.core.tristate import Tri
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor
@@ -95,6 +96,7 @@ class WizardOptions:
     vbmeta: Path | None = None
     chain: Mapping[str, Path] = field(default_factory=dict)
     key: Path | None = None
+    catalog: Path | None = None
     lock_state: str | None = None
     stored: Mapping[int, int] = field(default_factory=dict)
     slot_policy: SlotPolicy = SlotPolicy.CURRENT
@@ -320,6 +322,33 @@ def stage_probe(run: WizardRun, *, runner: ToolRunner, now: datetime) -> StageRe
     )
 
 
+def _anchored_key(run: WizardRun) -> tuple[bytes | None, str | None, str | None]:
+    """Resolve the expected AVB key from a catalog entry (T30).
+
+    The entry is selected by the caller-supplied device fingerprint or, when the
+    device was probed, by the probed fingerprint from the session device. The
+    catalog anchors *which key* is expected and is caller-supplied input, never
+    device evidence, so the stage keeps its warning.
+    """
+    options = run.options
+    if options.catalog is None or options.key is not None:
+        return None, None, None
+    fingerprint = options.device_fingerprint
+    if fingerprint is None and run.device is not None:
+        fingerprint = run.device.fingerprint_sha256
+    if fingerprint is None:
+        return None, None, None
+    catalog_bytes = options.catalog.read_bytes()
+    catalog_sha256 = hashlib.sha256(catalog_bytes).hexdigest()
+    catalog = parse_catalog(json.loads(catalog_bytes.decode("utf-8")))
+    entry = catalog.device_by_fingerprint(fingerprint)
+    if entry is None:
+        return None, None, catalog_sha256
+    if entry.trusted_key is None:
+        return None, None, catalog_sha256
+    return entry.trusted_key, entry.source, catalog_sha256
+
+
 def stage_avb(run: WizardRun, *, now: datetime) -> StageResult:
     options = run.options
     if options.vbmeta is None:
@@ -332,6 +361,10 @@ def stage_avb(run: WizardRun, *, now: datetime) -> StageResult:
         image = load_vbmeta(options.vbmeta)
         chain = {name: load_vbmeta(path) for name, path in options.chain.items()}
         expected_key = None if options.key is None else _read_key(options.key)
+        anchored_source: str | None = None
+        catalog_sha256: str | None = None
+        if options.key is None and options.catalog is not None:
+            expected_key, anchored_source, catalog_sha256 = _anchored_key(run)
         if chain:
             report = verify_vbmeta_chain(image, chain, expected_key=expected_key)
             valid = report.valid
@@ -343,11 +376,21 @@ def stage_avb(run: WizardRun, *, now: datetime) -> StageResult:
             valid = signature.valid
             detail = signature.reason
             payload = signature.to_dict()
-    except (AvbError, OSError) as exc:
+    except (AvbError, OSError, CatalogError, ValueError) as exc:
         return StageResult("avb", StageOutcome.BLOCKED, f"AVB input could not be read: {exc}")
     run.vbmeta = image
     run.chain = chain
     warnings: tuple[str, ...] = ()
+    if anchored_source is not None and catalog_sha256 is not None:
+        payload["trusted_key_source"] = anchored_source
+        payload["catalog_sha256"] = catalog_sha256
+        warnings = ("the expected key came from a caller-supplied catalog entry",)
+    elif catalog_sha256 is not None:
+        payload["catalog_sha256"] = catalog_sha256
+        warnings = (
+            "the catalog had no entry with an embedded key for this fingerprint; "
+            "no key was anchored",
+        )
     if valid is False:
         check = _check(Tri.FALSE, detail, payload, ("AVB signature or chain is invalid",))
         outcome = StageOutcome.FAIL
@@ -355,20 +398,31 @@ def stage_avb(run: WizardRun, *, now: datetime) -> StageResult:
         check = _check(Tri.UNKNOWN, detail, payload)
         outcome = StageOutcome.BLOCKED
     elif expected_key is None:
+        no_key_warnings = [
+            "internally consistent is not trust; supply --key to compare a trusted key"
+        ]
+        if catalog_sha256 is not None:
+            no_key_warnings.append(
+                "the catalog had no entry with an embedded key for this fingerprint; "
+                "no key was anchored"
+            )
         check = _check(
             Tri.UNKNOWN,
             "AVB is internally consistent but no expected key was supplied",
             payload,
-            ("internally consistent is not trust; supply --key to compare a trusted key",),
+            tuple(no_key_warnings),
         )
         warnings = check.warnings
         outcome = StageOutcome.BLOCKED
     else:
+        true_warnings = ["the expected key is caller-supplied and not device-bound"]
+        if anchored_source is not None:
+            true_warnings.append("the expected key came from a caller-supplied catalog entry")
         check = _check(
             Tri.TRUE,
             detail,
             payload,
-            ("the expected key is caller-supplied and not device-bound",),
+            tuple(true_warnings),
         )
         warnings = check.warnings
         outcome = StageOutcome.PASS
