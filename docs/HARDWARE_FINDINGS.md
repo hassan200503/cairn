@@ -101,6 +101,12 @@ For the first pass on any device, record:
 - `getvar product`, `variant`, `version-bootloader`, `version-baseband`
 - dynamic partition capability, if exposed
 
+`cairn probe --capture DIR` runs this checklist automatically: it journals every
+invocation in a transcript, scrubs serials, and writes a §2-template finding
+draft (`finding.yaml`) next to the transcript with its SHA-256. Review the draft
+before promoting it into §4 — a capture is one observation; a finding needs
+reproduction (§3).
+
 Do not run `fetch` on a locked production device: AOSP restricts it to `vendor_boot`
 on debuggable, unlocked devices. Record the refusal if you test it.
 
