@@ -2,53 +2,171 @@
 
 **Mark the path. Verify the state.**
 
+[![CI](https://github.com/hassan200503/cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/hassan200503/cairn/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-blue)
+![License](https://img.shields.io/badge/license-Apache--2.0-green)
+![Status](https://img.shields.io/badge/status-alpha-orange)
+
 Cairn is a fail-safe Android flashing workbench. It refuses unsafe jobs before the
 first write, verifies every write at a stated level, journals every step so an
-interrupted job can resume or roll back to a known state, and checks that a recovery
-path exists before taking risk.
+interrupted job can resume, and checks that a recovery path exists before taking
+risk.
 
 > Cairn (n.): a stack of stones that marks a proven path across uncertain ground.
 > Every flash leaves a cairn behind: evidence of where you have been and how to get
 > back.
 
-**Status:** pre-alpha. The v2 specification and execution plan are complete; the M0
-foundation is in progress. Cairn does not flash a real device yet.
+**Status: alpha.** The full preflight → plan → safety-gate → approve → execute →
+journal pipeline is implemented and tested (627 tests, 7 CI jobs including two
+official AOSP oracles). Every write path is gated to the transcript simulator
+(ADR-027); a real-device write transport does not exist and will not exist until
+the M6 gate passes (external reviews + hardware evidence, tracked in
+[KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md)).
 
-[![CI](https://github.com/hassan200503/cairn/actions/workflows/ci.yml/badge.svg)](https://github.com/hassan200503/cairn/actions/workflows/ci.yml)
+---
 
-## The promise
+## Table of contents
+
+- [Why](#why)
+- [The promise](#the-promise)
+- [Screenshots](#screenshots)
+- [Install](#install)
+- [Quickstart](#quickstart)
+- [Verification levels](#verification-levels)
+- [The safety model](#the-safety-model)
+- [What is implemented](#what-is-implemented)
+- [Command surface](#command-surface)
+- [Repository map](#repository-map)
+- [Development](#development)
+- [Scope order](#scope-order)
+- [What Cairn will never do](#what-cairn-will-never-do)
+- [Documentation](#documentation)
+- [License](#license)
+
+## Why
 
 Phones are physical devices on cables. "Almost impossible to fail" is a direction,
-not a state. Cairn measures and reports:
+not a state. A failed flash has three failure domains — the package, the host link,
+and the device's own state — and most flashing tools reason about only the first.
+Cairn measures and reports all three, and it refuses to guess:
 
-- unsafe jobs refused before any write;
-- every write verified at a named level (V0-V3);
-- every interruption resumable or rolled back to a known state;
-- a recovery path checked before risk is taken.
+- unsafe jobs are refused **before** any write, with named rules and citations;
+- every write is verified at a **named level** (V0–V3), never a bare "verified";
+- every interruption is **resumable or provably safe** via a hash-chained journal;
+- a recovery path is **checked before risk is taken**, and critical partitions are
+  backed up into an encrypted, device-bound vault first.
 
 It does not promise that nothing can go wrong. It promises to **fail safe, not fail
 never**, and to never hide which of the two happened.
 
-## What Cairn is
+## Screenshots
 
-- A planner that uses the vendor's tested flash order as the baseline and deviates
-  only for catalog-proven commutations.
-- A safety engine over tri-state facts (`TRUE`, `FALSE`, `UNKNOWN`) with provenance,
-  observation time, and freshness bounds.
-- A transactional executor with a write-ahead journal, crash-safe resume, and
-  reconciliation after every interruption.
-- A provenance and AVB checker that establishes what a package is before trusting
-  what it contains.
-- A Host Doctor for the most common real-world failure: the host, cable, driver, or
-  link, not the phone.
-- A Recovery Kit and encrypted, device-bound Critical Partition Vault.
-- Simulators driven by recorded real-device transcripts, plus fault injection.
+The read-only preflight wizard runs eight stages over a package, a hash index, and
+a device probe — simulated here by replaying a recorded transcript, and labeled as
+such at every line:
 
-## What Cairn is not
+<p align="center">
+  <img src="docs/screenshots/wizard-preflight.svg" alt="cairn wizard preflight output">
+</p>
 
-Cairn will never include FRP bypass, IMEI changes, carrier-lock circumvention, loader
-authentication bypass, or signature-check defeat. Cross-device data transplant is
-not allowed. Restoring a device's own backed-up data to that same device is allowed.
+`cairn plan` produces a canonical-hash vendor-order dry run plus a separate safety
+report. Every rule it cannot evaluate is an explicit `UNKNOWN` block — Cairn never
+invents a fact to pass a gate:
+
+<p align="center">
+  <img src="docs/screenshots/plan-safety.svg" alt="cairn plan safety report">
+</p>
+
+## Install
+
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/hassan200503/cairn.git
+cd cairn
+./install.ps1
+```
+
+**Linux/macOS:**
+
+```console
+git clone https://github.com/hassan200503/cairn.git
+cd cairn
+./install.sh
+```
+
+Both scripts install the CLI as an isolated `uv tool` and run `cairn version` to
+confirm. Upgrade with `git pull` and re-running the script (`--force` is included).
+
+**Manual install** (or inside a development checkout):
+
+```console
+uv tool install --from . cairn-flash      # install the CLI from source
+# or
+uv sync                                   # dev environment with test tooling
+uv run cairn version
+```
+
+Releases are tagged on GitHub with built wheels and sdists under
+[Releases](https://github.com/hassan200503/cairn/releases).
+
+## Quickstart
+
+Everything below is read-only on a real device. The only write paths are
+simulator-gated and labeled `SIMULATED`.
+
+```console
+# What is this host? WSL/VM detection, USB controllers, tool versions, link soak.
+cairn doctor [--serial <serial>] [--soak 5]
+
+# What is this device? Read-only getvar probe; never writes.
+cairn probe [--serial <serial>] [--fastboot <path>]
+
+# Record the full read-only probe checklist from a real device into a
+# scrubbed transcript plus a hardware-finding draft (serials cannot survive).
+cairn probe --capture ./capture-out
+
+# What is this package? Inspect without extracting; hash every entry.
+cairn inspect factory.zip --hash
+cairn provenance factory.zip --index index.json
+
+# Should this job run at all? Vendor-order dry run + safety report.
+cairn plan factory.zip --index index.json
+
+# Trust chain: AVB headers, digests, signatures, chained keys.
+cairn avb info vbmeta.img
+cairn avb verify vbmeta.img --key key.avbpubkey --chain boot=boot.img
+cairn avb key-check vbmeta.img --key key.avbpubkey --lock-state locked
+# ...or anchor the expected key from a source-cited device catalog:
+cairn catalog check catalog.json
+cairn avb key-check vbmeta.img --catalog catalog.json --product shiba --lock-state locked
+
+# Rollback safety: can this package lower the anti-rollback counter?
+cairn rollback read --serial <serial>
+cairn rollback check vbmeta.img --device --serial <serial>
+
+# Virtual A/B state gates.
+cairn vab status --serial <serial>
+cairn vab dynpart --mode fastbootd --serial <serial>
+
+# The full resumable preflight: doctor → inspect → provenance → probe →
+# avb → rollback → plan → approval, persisted to a strict session file.
+cairn wizard factory.zip --index index.json --state session.json --serial <serial> \
+    --vbmeta vbmeta.img --catalog catalog.json
+
+# Execute an approved plan — in the transcript simulator only (ADR-027):
+cairn approval issue ... && cairn execute --state session.json --simulate writes.json ...
+
+# Recovery kit: back up critical partitions, verify, drill the M6 gate.
+cairn recovery backup --partition persist --asset persist.img --out vault.json \
+    --product shiba --serial-sha256 <hex> --device-fingerprint <hex> --passphrase-file pf.txt
+cairn recovery drill --partition persist --asset persist.img --expected-sha256 <hex> \
+    --vault vault.json --last-resort "EDL 9008 + signed factory image" \
+    --simulate writes.json --other-serial-sha256 <hex> --other-fingerprint <hex> \
+    --product shiba --serial-sha256 <hex> --device-fingerprint <hex> --passphrase-file pf.txt
+```
 
 ## Verification levels
 
@@ -62,85 +180,100 @@ The word "verified" is never printed without a level.
 | V3 | Post-boot identity was confirmed (bootloader slot signals, adb fingerprint, or a user-confirmed first boot). |
 
 Fastboot tops out at V1 for general partitions: there is no generic partition
-read-back in the fastboot protocol, and AOSP's `fetch` is restricted to `vendor_boot`
-on debuggable, unlocked devices. The report says so instead of pretending otherwise.
+read-back in the fastboot protocol, and AOSP's `fetch` is restricted to
+`vendor_boot` on debuggable, unlocked devices. The report says so instead of
+pretending otherwise.
 
-## The native-path ladder
+<p align="center">
+  <img src="docs/screenshots/levels.svg" alt="cairn levels output" width="480">
+</p>
 
-Cairn selects the least invasive path that satisfies the job:
+## The safety model
 
-1. Signed full OTA through `adb sideload` or `update_engine` (device-side
-   verification and slot logic).
-2. Vendor flashing flow driven by `fastboot-info.txt`.
-3. Per-partition fastboot flashing.
-4. Low-level modes (EDL, MediaTek preloader, Samsung download mode) as Assisted
-   tier, with user-supplied programmer/DA files where required.
+Cairn's engine reasons over **tri-state facts** (`TRUE`, `FALSE`, `UNKNOWN`) with
+provenance, observation time, and freshness bounds. `FALSE` is never overridable;
+`UNKNOWN` blocks. The rules (full definitions in
+[SAFETY_RULES.md](docs/SAFETY_RULES.md)):
 
-## Quickstart
+| Rule | Gate | Block behavior |
+| --- | --- | --- |
+| SR-001/002 | package/device identity, hash-index provenance | UNKNOWN blocks |
+| SR-003 | AVB chain of trust verified | UNKNOWN blocks |
+| SR-004/005 | rollback index cannot decrease | unknown stored index is a hard stop |
+| SR-008 | recovery assets verified before wipe/relock | FALSE/UNKNOWN block |
+| SR-009 | critical partitions backed up in the device-bound vault | no backup, no wipe/relock |
+| SR-010 | Virtual A/B merge state is `none` | mid-merge is never overridable |
+| SR-011 | dynamic-partition mode matches the job | bootloader-vs-fastbootd mismatch blocks |
+| SR-013 | lock state known and trusted-key checks pass | UNKNOWN blocks |
+| SR-018 | approval token binds plan, package, device, and tools | any byte change invalidates |
 
-Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Safety properties that are tested, not just claimed:
 
-```console
-uv sync
-uv run cairn version
-uv run cairn levels
-uv run cairn doctor
-uv run cairn probe --serial <serial>
-uv run cairn inspect <package.zip>
-uv run cairn provenance <package.zip> --index <index.json>
-uv run cairn plan <package.zip> --index <index.json>
-uv run cairn avb info <vbmeta.img>
-uv run cairn avb digest <vbmeta.img> [--chain boot=<boot.img>]
-uv run cairn avb verify <vbmeta.img> [--key <key.avbpubkey>] [--chain boot=<boot.img>]
-uv run cairn avb key-check <vbmeta.img> --key <key.avbpubkey> --lock-state locked
-uv run cairn rollback read [--serial <serial>] [--simulate <transcript.json>]
-uv run cairn rollback check <vbmeta.img> [--chain boot=<boot.img>] [--stored 3=3]
-uv run cairn rollback check <vbmeta.img> --device [--serial <serial>]
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy src
-uv run pytest -q
-```
+- **Approval binding** (SR-018): the token HMAC-signs the plan hash, evidence
+  snapshot, archive hash, every package entry hash, the device binding, and tool
+  identities. The executor re-verifies every staged image against the binding at
+  execution time (TOCTOU guard).
+- **Write-ahead journal**: append-only, hash-chained, fsync-per-record; a crash at
+  *every* journal point is covered by a harness that proves each resume reaches the
+  exact uninterrupted final state. Interrupted reboots are never re-run blindly.
+  Long plans rotate to verified continuation journals instead of growing unbounded.
+- **Pre-write reconciliation**: before the first write, the executor reads
+  `snapshot-update-status` and `current-slot` and aborts on a mid-merge device.
+- **Recovery vault** (format v2, ADR-029): PBKDF2-HMAC-SHA256 (600k iterations),
+  encrypt-then-MAC, device-bound, restore-only-same-device — a cross-device restore
+  is refused unconditionally, never overridably.
+- **Mutation testing**: every safety rule and every approval-binding check is
+  proven killed by the suite (`python tools/mutation_check.py`, currently 48/48).
+- **Official oracles in CI**: the sparse-image parser is differentially tested
+  against AOSP `libsparse`, and the super-metadata parser against `lpmake` built
+  from pinned AOSP source.
 
-`cairn doctor` runs read-only host checks (WSL/VM, USB controllers, tool versions,
-power policy, antivirus heuristics) and a bounded `getvar` link soak. `cairn probe`
-performs a read-only `getvar all`. Both can replay a recorded transcript with
-`--simulate`, which is labeled as simulated and never treated as device evidence.
-`cairn inspect` parses a factory or OTA zip without extracting it, reports unknown
-entries and nested archives, and can hash every entry with `--hash`. The `cairn
-provenance` command hashes a package and compares it with a local JSON index; a match
-is a signal, not a signature check. `cairn plan` emits a read-only vendor-order dry
-run with a canonical plan hash and a separate safety report. It is executable only
-when both the structural planner and every applicable safety rule permit it. With
-the current command inputs, package provenance is evaluated and unavailable identity,
-AVB, rollback, tool, and lock/key evidence remain explicit `UNKNOWN` blocks; Cairn
-does not invent those facts. `cairn avb` parses standalone, padded,
-or footer-embedded VBMeta images, computes the AOSP digest including supplied
-chained images, and verifies the RSA signature against the embedded key or an
-expected raw AVB public key. With `--chain`, it also follows the chain of trust:
-each chain descriptor's key is matched against the chained image's embedded key,
-the chained signature is checked, and nested chains are followed. Embedded-key
-validity is not a trust anchor. `avb verify` does not check rollback. `cairn
-avb key-check` adds the lock-state context to a valid VBMeta signature and an
-expected key: a locked mismatch is FALSE, while an unlocked mismatch is UNKNOWN
-because the bootloader would not enforce that key. Its lock state and trusted key
-are caller-supplied, so it does not read a device root of trust and cannot itself
-satisfy SR-013. `cairn
-rollback read` performs one read-only `fastboot getvar all` and parses the
-vendor-specific stored-index forms that have been observed:
-`stored_rollback_index:<location> = <value>` and
-`avb_stored_rollback_indexes:<location>:<value>`. AOSP fastboot has no standard
-variable for this value, so absence is UNKNOWN, not zero. Conflicts, malformed
-values, truncated output, and failed commands are also UNKNOWN. OEM signals such
-as `ap-ar-s` are reported as warnings and are never mapped to AVB locations.
-`cairn rollback check` answers whether a package can lower a rollback counter: it
-compares the package's rollback indexes with caller-supplied stored values or,
-with `--device`, values from that read. An unreadable image or chain is UNKNOWN,
-never FALSE, because a parse error is not evidence of a downgrade. The comparison
-uses the AOSP inequality, follows nested chain descriptors, and treats an unknown
-stored index as a hard stop, not a pass. It parses chained images but does not
-verify their signatures; use `cairn avb verify --chain` for that. None of these
-commands writes to a device.
+## What is implemented
+
+- ✅ Host Doctor (WSL/VM, USB, drivers, power policy, link soak)
+- ✅ Read-only fastboot transport + full probe-capture with serial scrubbing
+- ✅ fastboot-info v1 parser, factory/OTA zip inspection (no extraction)
+- ✅ Offline hash-index provenance
+- ✅ AVB parser, signature + chain verification, contextual expected-key check,
+  catalog-anchored keys
+- ✅ Vendor-order planner with canonical plan hash
+- ✅ Rollback oracle + vendor stored-index reader
+- ✅ Safety engine (13 rules) with override policy
+- ✅ Approval keygen/issue/verify with full input binding
+- ✅ Simulator-gated executor with crash-safe journal, resume, and VAB
+  reconciliation
+- ✅ Recovery vault (encrypted, device-bound) + M6 drill (simulated)
+- ✅ Virtual A/B merge-state and dynamic-partition gates; modeled
+  snapshot cancel/merge flows
+- ✅ Super-metadata parser, differentially tested against pinned-source AOSP lpmake
+- ✅ Resumable preflight wizard with strict session persistence
+- ⏳ Real-device write transport — **blocked behind the M6 gate** (external
+  crypto/safety review + real hardware evidence; see
+  [REVIEW_BUNDLE.md](docs/REVIEW_BUNDLE.md))
+- ⏳ Samsung / EDL / MediaTek backends — research-only, no hardware yet
+
+## Command surface
+
+Run `cairn --help`, or `<command> --help` for each. The full table with exit codes
+is in [docs/STATE.md §4](docs/STATE.md).
+
+| Command | Purpose |
+| --- | --- |
+| `cairn doctor` | read-only host checks + bounded `getvar` link soak |
+| `cairn probe` | read-only `getvar all` probe; `--capture DIR` records the finding checklist with serial scrubbing |
+| `cairn inspect` | read-only factory/OTA zip inspection |
+| `cairn provenance` | match a package against a local hash index |
+| `cairn plan` | vendor-order dry run + full safety report |
+| `cairn wizard` | resumable read-only preflight session |
+| `cairn approval` | keygen / issue / verify / inspect approval tokens |
+| `cairn avb` | info / digest / verify / key-check |
+| `cairn catalog` | validate source-cited device catalogs |
+| `cairn rollback` | read / check rollback counters |
+| `cairn vab` | status / dynpart / cancel / merge (cancel & merge simulator-only) |
+| `cairn execute` | run an approved plan in the simulator with a write-ahead journal |
+| `cairn recovery` | backup / verify / restore / drill |
+
+Exit codes: `0` ok, `1` failed, `2` usage, `3` blocked or UNKNOWN.
 
 ## Repository map
 
@@ -148,26 +281,41 @@ commands writes to a device.
 src/cairn/
   core/          tri-state logic, evidence graph, verification levels, errors
   tools/         bounded subprocess runner and pinned tool manifest
-  sparse/        AOSP sparse format primitives, validation, and the libsparse oracle
-  adapters/      read-only device transports (fastboot first)
+  sparse/        AOSP sparse format primitives, validation, libsparse oracle
+  adapters/      read-only device transports + probe capture (scrubbed transcripts)
+  catalog/       device catalog: source-cited anchoring records
   host/          Host Doctor: drivers, USB, power, virtualization, link soak
   package/       fastboot-info and factory/OTA package inspection
   plan/          read-only vendor-order planner and plan hash
-  provenance/    offline hash index, AVB VBMeta parsing, and AVB chain verification (partial)
-  rollback/      rollback oracle plus vendor-specific device stored-index reader
+  provenance/    hash index, AVB parsing, chain verification, lock/key trust
+  rollback/      rollback oracle + vendor stored-index reader
   safety/        safety rule engine and override policy
+  approval/      HMAC approval tokens and input binding
+  wizard/        resumable preflight stages, strict session persistence
+  executor/      simulator-gated executor, hash-chained write-ahead journal
+  recovery/      encrypted device-bound vault, asset checks, M6 drill
+  vab/           merge-state gate, dynamic-partition gate, snapshot flows, super metadata
   sim/           transcript schema and fault-injecting fastboot simulator
-docs/
-  STATE.md             canonical current state, for whoever picks this up next
-  SPEC_V2.md          the reviewed, corrected v2 specification
-  EXECUTION_PLAN.md   workstreams, phases, gates, first tasks
-  ROADMAP.md          M0-M12 with acceptance criteria
-  RESEARCH_NOTES.md   verified sources and open research questions
-  SAFETY_RULES.md     rule IDs, defaults, provenance requirements
-  DECISIONS.md        architecture decision records
-  KNOWN_UNKNOWNS.md   what we do not know yet
-  HARDWARE_FINDINGS.md findings from real device runs
+docs/            specification, safety rules, ADRs, known unknowns, hardware findings
+tools/           mutation harness and AOSP oracle builders
+tests/           627 tests; fixtures from scrubbed real transcripts
 ```
+
+## Development
+
+```console
+uv sync
+uv run ruff format .        # format
+uv run ruff check .         # lint
+uv run mypy src             # strict types
+uv run pytest -q            # 627 tests
+python tools/mutation_check.py   # safety-rule mutation harness (48/48 killed)
+```
+
+CI (`.github/workflows/ci.yml`) runs seven jobs on every push: lint + types, the
+AOSP libsparse oracle, the AOSP lpmake differential oracle (built from pinned
+source), and the test matrix on Ubuntu and Windows, Python 3.12 and 3.14. A change
+is not done until all gates pass and the docs are updated in the same commit.
 
 ## Scope order
 
@@ -181,12 +329,31 @@ Samsung's 2026 Maintenance Mode gate, and the fact that Download Mode may be
 unreachable when Android cannot boot, make Samsung a recovery-risk market rather
 than a first target. That is recorded, not hand-waved.
 
+## What Cairn will never do
+
+No FRP bypass. No IMEI changes. No carrier-lock circumvention. No loader
+authentication bypass. No signature-check defeat. No cross-device data transplant.
+Restoring a device's own backed-up data to that same device is allowed and is
+exactly what the vault and drill exist for.
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [docs/STATE.md](docs/STATE.md) | canonical current state — start here |
+| [docs/SPEC_V2.md](docs/SPEC_V2.md) | the reviewed v2 specification |
+| [docs/SAFETY_RULES.md](docs/SAFETY_RULES.md) | every rule, its tri-state defaults, and sources |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | architecture decision records (ADR-001 … ADR-029) |
+| [docs/KNOWN_UNKNOWNS.md](docs/KNOWN_UNKNOWNS.md) | what is not known yet, and what would resolve it |
+| [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md) | workstreams T01–T30, gates, definition of done |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | milestones M0–M12 |
+| [docs/RECOVERY_THREAT_MODEL.md](docs/RECOVERY_THREAT_MODEL.md) | the recovery threat model |
+| [docs/REVIEW_BUNDLE.md](docs/REVIEW_BUNDLE.md) | the external review package (KU-032) |
+| [docs/HARDWARE_FINDINGS.md](docs/HARDWARE_FINDINGS.md) | findings from real device runs |
+
 ## License
 
 Apache-2.0 for the core. The signed device catalog is intended to be a separate
 commercial asset. Tools invoked as separate processes keep their own licenses:
-Heimdall is MIT, Thor is MPL-2.0, and bkerler/edl and mtkclient are GPL-3.0.
-
-## Documentation
-
-Start with [the current state](docs/STATE.md), then [the v2 specification](docs/SPEC_V2.md) and [the execution plan](docs/EXECUTION_PLAN.md).
+Heimdall is MIT, Thor is MPL-2.0, and bkerler/edl and mtkclient are GPL-3.0 —
+Cairn never links or vendors their code.

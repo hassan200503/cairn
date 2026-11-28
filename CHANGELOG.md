@@ -4,10 +4,13 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-11-27
 
 ### Added
 
+- Release packaging: `install.ps1` and `install.sh` installer scripts that install
+  the CLI as an isolated `uv tool`, and a full README overhaul with real-output
+  screenshots (`docs/screenshots/`).
 - Cairn v2 specification with corrections to the v1 sparse constants, AVB
   chain-of-trust rule, licensing, Samsung strategy, fastboot read-back, post-wipe
   verification, A/B rollback language, planner order, resplitter scope, approval

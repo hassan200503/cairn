@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="665.6" height="515" viewBox="0 0 665.6 515" font-family="Consolas, Menlo, monospace">
+<rect width="665.6" height="515" rx="10" fill="#21252b"/>
+<rect width="665.6" height="28" rx="10" fill="#323842"/>
+<rect y="18" width="665.6" height="10" fill="#323842"/>
+<circle cx="18" cy="14" r="6" fill="#ff5f57"/>
+<circle cx="36" cy="14" r="6" fill="#febc2e"/>
+<circle cx="54" cy="14" r="6" fill="#28c840"/>
+<text x="332.8" y="18" text-anchor="middle" fill="#9da5b4" font-size="12" font-family="Segoe UI, sans-serif">cairn wizard — read-only preflight (simulated device)</text>
+<text x="16" y="40" fill="#d7dae0" font-size="13" xml:space="preserve">cairn wizard session: cdb72259a42fe8e01ee04442d0d27df7</text>
+<text x="16" y="57" fill="#d7dae0" font-size="13" xml:space="preserve">package: C:\Users\kkc36\AppData\Local\Temp\cairn-demo\demo-factory.zip</text>
+<text x="16" y="74" fill="#d7dae0" font-size="13" xml:space="preserve">index: C:\Users\kkc36\AppData\Local\Temp\cairn-demo\demo-index.json</text>
+<text x="16" y="91" fill="#61afef" font-size="13" xml:space="preserve">outcome: SIMULATED</text>
+<text x="16" y="108" fill="#e5c07b" font-size="13" xml:space="preserve">verdict: UNKNOWN</text>
+<text x="16" y="125" fill="#d7dae0" font-size="13" xml:space="preserve">verification level: read-only; V0-V3 describe writes and are not claimed</text>
+<text x="16" y="142" fill="#d7dae0" font-size="13" xml:space="preserve">archive sha256: f8d203a7153bab6dc29842ec62ad8f43ad582e7a5917277cd4fadb57d6e6792b</text>
+<text x="16" y="159" fill="#d7dae0" font-size="13" xml:space="preserve">index sha256: 7166245bf3d8b3d5e2c36ba15899d247da1eb4d680f2b79712f92e8a40f5b7c4</text>
+<text x="16" y="176" fill="#d7dae0" font-size="13" xml:space="preserve">device source: simulated (simulated)</text>
+<text x="16" y="193" fill="#d7dae0" font-size="13" xml:space="preserve">serial sha256: 666ba6b526e4f03eb490a743d1700951e4d2949257a5aa7d8b1583936f7263c0</text>
+<text x="16" y="210" fill="#d7dae0" font-size="13" xml:space="preserve">lock state: unlocked</text>
+<text x="16" y="227" fill="#d7dae0" font-size="13" xml:space="preserve">stages:</text>
+<text x="16" y="244" fill="#61afef" font-size="13" xml:space="preserve">  doctor: SIMULATED - simulated host and link checks; not device evidence</text>
+<text x="16" y="261" fill="#4ec964" font-size="13" xml:space="preserve">  inspect: PASS - factory package with 2 entries; archive was not extracted</text>
+<text x="16" y="278" fill="#4ec964" font-size="13" xml:space="preserve">  provenance: PASS - archive and 2 entry hashes match the local index</text>
+<text x="16" y="295" fill="#61afef" font-size="13" xml:space="preserve">  probe: SIMULATED - simulated transcript replay; this is not device evidence</text>
+<text x="16" y="312" fill="#e5c07b" font-size="13" xml:space="preserve">    warning: device identity fingerprint is unavailable; approval cannot be bound</text>
+<text x="16" y="329" fill="#e5c07b" font-size="13" xml:space="preserve">  avb: SKIPPED - no VBMeta image was supplied; AVB checks were skipped</text>
+<text x="16" y="346" fill="#e5c07b" font-size="13" xml:space="preserve">  rollback: SKIPPED - no VBMeta image was supplied; rollback counters were not evaluated</text>
+<text x="16" y="363" fill="#e5c07b" font-size="13" xml:space="preserve">  plan: BLOCKED - device fingerprint or nonce is unavailable; approval cannot be bound</text>
+<text x="16" y="380" fill="#e5c07b" font-size="13" xml:space="preserve">    warning: a local hash index match is not a signature or authenticity check</text>
+<text x="16" y="397" fill="#d7dae0" font-size="13" xml:space="preserve">plan sha256: 7835f4598c102c0090c51a66b4ec88f9ee9f65cf8c1bdb59eb0b2bfea4355674</text>
+<text x="16" y="414" fill="#4ec964" font-size="13" xml:space="preserve">structurally executable: TRUE</text>
+<text x="16" y="431" fill="#e5c07b" font-size="13" xml:space="preserve">pre-approval safety: UNKNOWN (can_proceed=FALSE)</text>
+<text x="16" y="448" fill="#e5c07b" font-size="13" xml:space="preserve">warning: device identity fingerprint is unavailable; approval cannot be bound</text>
+<text x="16" y="465" fill="#e5c07b" font-size="13" xml:space="preserve">warning: a local hash index match is not a signature or authenticity check</text>
+<text x="16" y="482" fill="#d7dae0" font-size="13" xml:space="preserve">read-only: no device writes were performed</text>
+</svg>
