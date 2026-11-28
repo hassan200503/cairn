@@ -37,6 +37,7 @@ from cairn.approval import (
     verify_approval,
     write_approval_key,
 )
+from cairn.catalog import CatalogError, DeviceEntry, load_catalog
 from cairn.core.errors import ToolError
 from cairn.core.evidence import EvidenceSource
 from cairn.core.tristate import Tri
@@ -891,11 +892,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="compare the image key with a trusted key under a lock state",
     )
     avb_key_check.add_argument("image", type=Path, help="VBMeta image")
-    avb_key_check.add_argument(
+    key_source = avb_key_check.add_mutually_exclusive_group()
+    key_source.add_argument(
         "--key",
         type=Path,
         metavar="AVBPUBKEY",
         help="raw AVB public key trusted for this device",
+    )
+    key_source.add_argument(
+        "--catalog",
+        type=Path,
+        metavar="CATALOG",
+        help="device catalog supplying the trusted key for the matched device",
+    )
+    avb_key_check.add_argument(
+        "--device-fingerprint",
+        metavar="HEX64",
+        help="device fingerprint sha256 used to select the catalog entry",
+    )
+    avb_key_check.add_argument(
+        "--product",
+        metavar="NAME",
+        help="device product used to select the catalog entry",
     )
     avb_key_check.add_argument(
         "--lock-state",
@@ -904,6 +922,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="caller-supplied bootloader lock state used to interpret the key match",
     )
     avb_key_check.add_argument(
+        "--json",
+        action="store_true",
+        help="emit machine-readable output",
+    )
+
+    catalog_parser = subparsers.add_parser(
+        "catalog",
+        help="validate a device catalog (read-only)",
+    )
+    catalog_sub = catalog_parser.add_subparsers(dest="catalog_command", metavar="subcommand")
+    catalog_check = catalog_sub.add_parser(
+        "check",
+        help="validate a catalog file and print its entries",
+    )
+    catalog_check.add_argument("catalog", type=Path, help="catalog JSON file")
+    catalog_check.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -1167,6 +1201,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "vab":
         return _run_vab(args)
+
+    if args.command == "catalog":
+        return _run_catalog(args)
 
     parser.error(f"unknown command: {args.command}")
 
@@ -2718,14 +2755,36 @@ def _run_avb_verify(args: argparse.Namespace) -> int:
 def _run_avb_key_check(args: argparse.Namespace) -> int:
     try:
         image = load_vbmeta(args.image)
-        trusted_key = None if args.key is None else _read_avb_key(args.key)
+        trusted_key: bytes | None
+        trusted_key_source: str | None = None
+        if args.key is not None:
+            trusted_key = _read_avb_key(args.key)
+        elif getattr(args, "catalog", None) is not None:
+            entry = _resolve_catalog_device(args, "cairn avb key-check")
+            if entry is None:
+                return EXIT_USAGE
+            if entry.trusted_key is None:
+                print(
+                    "cairn avb key-check: catalog entry for "
+                    f"{entry.product} carries no trusted_key_b64 to check against",
+                    file=sys.stderr,
+                )
+                return EXIT_FAILED
+            trusted_key = entry.trusted_key
+            trusted_key_source = entry.source
+        else:
+            trusted_key = None
         signature = verify_vbmeta_signature(image)
         result = evaluate_lock_key(
             signature,
             lock_state=LockState(args.lock_state),
             trusted_key=trusted_key,
+            trusted_key_source=trusted_key_source,
         )
     except AvbError as exc:
+        print(f"cairn avb key-check: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    except CatalogError as exc:
         print(f"cairn avb key-check: {exc}", file=sys.stderr)
         return EXIT_FAILED
 
@@ -2734,6 +2793,84 @@ def _run_avb_key_check(args: argparse.Namespace) -> int:
     else:
         _print_lock_key_check(result)
     return _exit_code_for_tri(result.state)
+
+
+def _resolve_catalog_device(args: argparse.Namespace, command: str) -> DeviceEntry | None:
+    """Select the catalog device entry named by --device-fingerprint or --product."""
+    catalog_path: Path | None = getattr(args, "catalog", None)
+    if catalog_path is None:
+        return None
+    try:
+        catalog = load_catalog(catalog_path)
+    except CatalogError as exc:
+        print(f"{command}: {exc}", file=sys.stderr)
+        return None
+    fingerprint = getattr(args, "device_fingerprint", None)
+    product = getattr(args, "product", None)
+    if fingerprint is None and product is None:
+        print(
+            f"{command}: pass --device-fingerprint or --product to select a catalog entry",
+            file=sys.stderr,
+        )
+        return None
+    if fingerprint is not None:
+        entry = catalog.device_by_fingerprint(fingerprint)
+    else:
+        assert product is not None
+        entry = catalog.device_by_product(product)
+    if entry is None:
+        named = fingerprint if fingerprint is not None else product
+        print(f"{command}: no catalog device matches {named}", file=sys.stderr)
+        return None
+    return entry
+
+
+def _run_catalog(args: argparse.Namespace) -> int:
+    if getattr(args, "catalog_command", None) != "check":
+        print("cairn catalog: choose 'check'", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        catalog = load_catalog(args.catalog)
+    except CatalogError as exc:
+        print(f"cairn catalog check: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "catalog": str(args.catalog),
+                    "devices": [entry.to_dict() for entry in catalog.devices],
+                    "packages": [
+                        {
+                            "archive_sha256": entry.archive_sha256,
+                            "label": entry.label,
+                            "source": entry.source,
+                            "notes": entry.notes,
+                        }
+                        for entry in catalog.packages
+                    ],
+                },
+                indent=2,
+            )
+        )
+        return EXIT_OK
+
+    print(f"catalog: {args.catalog}")
+    print(f"devices: {len(catalog.devices)}")
+    for device in catalog.devices:
+        print(f"  {device.product}")
+        print(f"    fingerprint_sha256: {device.fingerprint_sha256}")
+        print(f"    trusted_key_sha256: {device.trusted_key_sha256}")
+        key_state = "embedded" if device.trusted_key is not None else "sha256 only"
+        print(f"    trusted key: {key_state}")
+        if device.expected_lock_state is not None:
+            print(f"    expected lock state: {device.expected_lock_state}")
+        print(f"    source: {device.source}")
+    print(f"packages: {len(catalog.packages)}")
+    for package in catalog.packages:
+        print(f"  {package.archive_sha256[:12]}… {package.label} (source: {package.source})")
+    return EXIT_OK
 
 
 def _parse_chain_paths(specs: list[str], command: str) -> dict[str, Path] | None:
@@ -2813,6 +2950,8 @@ def _print_lock_key_check(result: LockKeyCheck) -> None:
         print(f"image key sha256: {result.image_key_sha256}")
     if result.trusted_key_sha256 is not None:
         print(f"trusted key sha256: {result.trusted_key_sha256}")
+    if result.trusted_key_source is not None:
+        print(f"trusted key source: {result.trusted_key_source}")
     print(f"reason: {result.reason}")
     for warning in result.warnings:
         print(f"warning: {warning}")
