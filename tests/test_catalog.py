@@ -19,6 +19,7 @@ from cairn.catalog import (
     CatalogError,
     DeviceCatalog,
     load_catalog,
+    load_catalog_verified,
     parse_catalog,
 )
 from cairn.cli import EXIT_FAILED, EXIT_OK, EXIT_USAGE, main
@@ -450,3 +451,68 @@ def test_rollback_check_refuses_key_without_signature(tmp_path: Path) -> None:
         ]
     )
     assert exit_code == EXIT_USAGE
+
+
+def test_catalog_key_rotation_invalidates_the_old_signature(tmp_path: Path) -> None:
+    """Key rotation (KU-018): re-signing under a new key is the whole procedure.
+
+    The old signature must fail against the new key and the re-signed file must
+    verify only with the new key, on the direct loader and on the anchoring
+    path an operator actually uses.
+    """
+    catalog_path = _catalog_file(tmp_path)
+    old_key = _key_file(tmp_path)  # b"k" * 32
+    new_key = tmp_path / "catalog-rotated.key"
+    new_key.write_bytes(b"r" * 32)
+    old_sig = tmp_path / "catalog.json.sig"
+
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(old_key)]) == EXIT_OK
+    old_sig_text = old_sig.read_text(encoding="ascii")
+
+    # Rotation: the catalog is re-signed under the new key; the .sig is replaced.
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(new_key)]) == EXIT_OK
+    assert main(["catalog", "verify", str(catalog_path), "--key", str(new_key)]) == EXIT_OK
+
+    # The old signature no longer verifies under the new key, anywhere.
+    old_sig.write_text(old_sig_text, encoding="ascii")
+    assert main(["catalog", "verify", str(catalog_path), "--key", str(new_key)]) == EXIT_FAILED
+    with pytest.raises(CatalogError):
+        load_catalog_verified(
+            catalog_path, hmac_key=new_key.read_bytes(), signature=old_sig_text.strip()
+        )
+    # Note what rotation does NOT guarantee: the file bytes did not change, so
+    # the old key still verifies its own (old) signature. Rotation's promise is
+    # that an operator trusting only the new key rejects the old signature —
+    # pinned above — never that old-key verification stops working.
+
+
+def test_catalog_rotation_through_the_anchoring_path(tmp_path: Path, capsys) -> None:
+    """After rotation the wizard/rollback anchoring path trusts the new key only."""
+    document = _catalog_document()
+    # A cited maximum bound makes the anchored evaluation deterministic (the
+    # package counter is not lower, so SR-004 is TRUE); the point of this test
+    # is that the post-rotation signature verifies on the anchoring path.
+    document["devices"][0]["rollback_bounds"] = {"0": {"minimum": 0, "maximum": 0}}  # type: ignore[index]
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(json.dumps(document), encoding="utf-8")
+    new_key = tmp_path / "catalog-rotated.key"
+    new_key.write_bytes(b"r" * 32)
+
+    assert main(["catalog", "sign", str(catalog_path), "--key", str(new_key)]) == EXIT_OK
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(catalog_path),
+            "--catalog-key",
+            str(new_key),
+            "--catalog-signature",
+            str(tmp_path / "catalog.json.sig"),
+            "--product",
+            "shiba",
+        ]
+    )
+    assert exit_code == EXIT_OK
+    assert "rollback bounds source: HF-0001" in capsys.readouterr().out

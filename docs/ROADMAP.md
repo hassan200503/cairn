@@ -16,7 +16,7 @@ when its acceptance test is reproducible from a clean checkout.
 | M8 | `adb sideload` and `update_engine` path with OTA metadata checks | Signed full OTA verified and applied through the native path; downgrade checks enforced | Not started |
 | M9 | Samsung adapter with pluggable backend, Knox irreversibles, Maintenance Mode handling | Simulator suite plus two real models; detect/validate/dry-run only for new models until proven; SR-021 enforced | Not started |
 | M10 | EDL and MediaTek adapters, Assisted tier | Programmer/DA mismatch always vetoed; no auth bypass; read-back used where permitted | Not started |
-| M11 | Wizard, installer, signed catalog updates, explainer, link model | Link model beats the rule baseline offline; signed catalog rotation tested; installer consent-first | **Partial** - the read-only resumable wizard and session-bound approval handoff landed; installer, signed catalog rotation, explainer, and link model remain unstarted |
+| M11 | Wizard, installer, signed catalog updates, explainer, link model | Link model beats the rule baseline offline; signed catalog rotation tested; installer consent-first | **Partial** - the read-only resumable wizard and session-bound approval handoff landed; the local workbench dashboard (`cairn ui`, ADR-031) and the Windows installer (`tools/installer/build.ps1`, PyInstaller onefile + Inno Setup, consent-first per-user install) landed in v0.3.0; catalog signing (ADR-030) and key-rotation semantics are tested. The explainer, link model, and signed catalog *distribution* infrastructure remain unstarted |
 | M12 | Unisoc analysis-only support | Read-only analysis; no flashing claims | Not started |
 
 ---
