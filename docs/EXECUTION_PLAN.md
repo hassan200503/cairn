@@ -438,6 +438,38 @@ checksum/truncation tests. Remaining work: wire the parsed layout into a
 rule or the planner; real-device `super.img` fixtures (KU-016, KU-033's
 remaining hardware half).
 
+### T22 - Real-transport scope review (folded into T23)
+
+**Deliverable:** assess what a real fastboot write transport needs beyond the
+existing read-only adapter.
+**Accept:** a written decision recorded in the plan; no write path without T15/M6.
+**Depends on:** T14, T15.
+**Status:** folded (2026-11-27). Review concluded that `cairn.adapters.fastboot`
+already wraps the full verb surface through `ToolRunner` (timeout, bounded
+output, env scrubbing, journal-visible `ToolResult`s), so the missing piece for
+the M6 gate is *evidence*, not transport code: scrubbed real-device probe
+transcripts and hardware findings. Those are produced by T23's capture tool;
+the write transport itself stays blocked behind T15 and KU-032 (ADR-027).
+
+### T23 - Read-only probe capture (hardware-finding factory)
+
+**Deliverable:** a one-command capture that runs the `getvar all` plus
+checklist probes of `HARDWARE_FINDINGS.md` §5 against a real device, journals
+every invocation in a transcript, scrubs serials, and emits a finding-template
+draft.
+**Accept:** no write verb is ever recorded; a raw serial cannot survive
+scrubbing (scrub raises instead of passing one through); the finding draft
+follows the §2 template; tests cover happy, refusal (`--simulate` conflict),
+and scrub-everywhere paths.
+**Depends on:** T06, T14 (transcript schema).
+**Status:** landed (2026-11-27). `cairn.adapters.capture` (`run_capture`,
+`scrub_transcript`, `write_capture`) and `cairn probe --capture DIR` write
+`transcript.json` + `finding.yaml` into a caller-provided directory and print
+the transcript SHA-256. Captures are labelled as single observations; a
+finding is promoted only after reproduction (§3 of `HARDWARE_FINDINGS.md`).
+The Windows `.cmd` batch test double must avoid parentheses inside `if (...)`
+blocks — `cmd` mis-parses `echo (bootloader) ...` there.
+
 ---
 
 ## 5. Release gates

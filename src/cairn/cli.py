@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cairn import __version__
+from cairn.adapters.capture import run_capture, write_capture
 from cairn.adapters.fastboot import FastbootClient, ProbedFact, ProbeResult
 from cairn.adapters.prepare import prepare_fastboot
 from cairn.approval import (
@@ -263,6 +264,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="TRANSCRIPT",
         help="replay a recorded transcript instead of touching hardware",
+    )
+    probe.add_argument(
+        "--capture",
+        type=Path,
+        metavar="DIR",
+        help=(
+            "run the read-only HARDWARE_FINDINGS.md checklist and write a "
+            "scrubbed transcript plus a finding template into DIR "
+            "(real devices only; never with --simulate)"
+        ),
     )
     probe.add_argument(
         "--json",
@@ -1228,6 +1239,14 @@ def _print_doctor(report: HostReport) -> None:
 def _run_probe(args: argparse.Namespace) -> int:
     runner = ToolRunner()
     simulated = args.simulate is not None
+    capture: Path | None = getattr(args, "capture", None)
+    if capture is not None and simulated:
+        print(
+            "cairn probe --capture records real device observations and cannot "
+            "be combined with --simulate",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     prefix: tuple[str, ...]
     tool: dict[str, object]
 
@@ -1295,6 +1314,31 @@ def _run_probe(args: argparse.Namespace) -> int:
         "device_fingerprint_detail": fingerprint_detail,
         "facts": [_fact_payload(fact) for fact in result.facts],
     }
+
+    if capture is not None:
+        capture_result = run_capture(client, serial=args.serial)
+        capture_files = write_capture(capture_result, capture)
+        payload["capture"] = {
+            "transcript": str(capture_files.transcript_path),
+            "findings": str(capture_files.findings_path),
+            "transcript_sha256": capture_files.transcript_sha256,
+            "serial_scrubbed": capture_result.serial_scrubbed,
+            "replacements": capture_result.replacements,
+            "detail": capture_result.detail,
+            "warnings": list(capture_result.warnings),
+        }
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return EXIT_OK if result.tool_ok else EXIT_FAILED
+        _print_probe(payload, result, simulated=simulated)
+        print()
+        print(f"capture transcript: {capture_files.transcript_path}")
+        print(f"  sha256: {capture_files.transcript_sha256}")
+        print(f"capture finding: {capture_files.findings_path}")
+        print(f"  {capture_result.detail}")
+        for warning in capture_result.warnings:
+            print(f"  warning: {warning}")
+        return EXIT_OK if result.tool_ok else EXIT_FAILED
 
     if args.json:
         print(json.dumps(payload, indent=2))

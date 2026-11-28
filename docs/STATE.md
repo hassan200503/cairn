@@ -10,11 +10,11 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the KU-033 record (T21 blocked on a
-missing oracle) was resolved: the official AOSP `lpmake` is now built from
-pinned source in CI (`tools/oracle/`), and the super-metadata parser
-(`cairn.vab.super_meta`) landed with a differential test suite and a golden
-fixture (T21, T24). The vault and
+**Last updated:** 2026-11-27, after the T22/T23 slice: the real-transport
+review was folded into a conclusion (the missing M6 input is evidence, not
+transport code) and `cairn probe --capture` landed — a one-command read-only
+probe capture that journals every invocation, scrubs serials, and drafts a
+`HARDWARE_FINDINGS.md` finding. The vault and
 drill are simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
@@ -65,7 +65,7 @@ src/cairn/
   core/          tri-state logic, evidence + evidence graph, verification levels, errors
   tools/         bounded subprocess runner, pinned tool manifest
   sparse/        AOSP sparse format parsing/validation, libsparse oracle
-  adapters/      read-only fastboot transport (getvar, devices, probe)
+  adapters/      read-only fastboot transport (getvar, devices, probe) and probe capture (scrubbed transcripts + finding drafts)
   host/          Host Doctor: WSL/VM, USB, drivers, power policy, link soak
   package/       fastboot-info v1 parser, factory/OTA zip inspection
   plan/          read-only vendor-order planner, canonical plan hash
@@ -108,7 +108,7 @@ Design notes, in the order the reader should meet them:
 | `cairn version` | print the version | 0 |
 | `cairn levels` | print the V0–V3 verification levels | 0 |
 | `cairn doctor` | read-only host checks plus a bounded `getvar` link soak | 0/1/3 |
-| `cairn probe` | read-only `getvar all` device probe | 0/1 |
+| `cairn probe` | read-only `getvar all` device probe; with `--capture DIR` it also records the §5 checklist getvars into a scrubbed transcript plus a finding draft (real device only, never with `--simulate`) | 0/1/2 |
 | `cairn inspect PACKAGE` | read-only factory/OTA zip inspection, no extraction | 0/1 |
 | `cairn provenance PACKAGE --index INDEX` | match a package against a local hash index | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn plan PACKAGE --index INDEX` | read-only vendor-order dry run plus SR-001/002/003/004/012/013 safety report | 0 both structural and safety gates pass / 1 error / 3 blocked |
@@ -356,17 +356,17 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 591 passed, 5 skipped
+uv run pytest -q               # 602 passed, 6 skipped
 ```
 
-The latest CI run is `46003349752` for the T14 executor slice merged through
-pull request [#2](https://github.com/hassan200503/cairn/pull/2) (merge `4cf91bc`)
-and is green: lint, format, and types; the AOSP libsparse sparse oracle; and
-tests on Ubuntu and Windows under Python 3.12 and 3.14. The T15–T21 slices
-postdate that run; their commits' CI runs must be green before merge. The
-591-test baseline above was confirmed locally on the T21 slice.
+The latest CI run is `46090782794` for the T21/T24 super-oracle slice merged
+through pull request [#10](https://github.com/hassan200503/cairn/pull/10)
+(merge `dc0ed9f`) and is green, including the lpmake differential job (10
+passed, 0 skipped). The T22/T23 capture slice postdates that run; its CI run
+must be green before merge. The 602-test baseline above was confirmed locally
+on the T23 slice.
 
-The five local skips are environmental, not gaps in coverage:
+The six local skips are environmental, not gaps in coverage:
 
 - `tests/test_package_archive.py` — `zipfile` normalizes backslashes to slashes
   on Windows, so the Windows-specific archive-name case is skipped there.
@@ -558,6 +558,18 @@ push, confirm CI green.
     guard was re-checked and is covered by
     `test_execute_refuses_image_that_changed_after_approval` and the
     not-covered-by-binding test.
+13. **T22/T23 — Real-transport review folded into probe capture (landed).**
+    The T22 review concluded that `cairn.adapters.fastboot` already covers the
+    verb surface through `ToolRunner`, so the missing M6 input is evidence, not
+    transport code. `cairn probe --capture DIR` now runs `getvar all` plus the
+    `HARDWARE_FINDINGS.md` §5 checklist against a real device, records every
+    invocation in a transcript, scrubs serials (scrubbing raises rather than
+    letting one through), and writes a finding-template draft next to the
+    transcript with its SHA-256. It refuses `--simulate` combinations; no write
+    verb is ever recorded. Remaining work: run it on real devices and promote
+    the results through the finding process (KU-033's hardware half), the
+    external reviews (KU-032), and the executor's journal growth policy and
+    slot/VAB reconciliation.
 
 The **guided session orchestrator** (`cairn wizard`) landed as the M11 spine in
 front of T14. It persists an atomically written, byte-bounded, strict JSON session
