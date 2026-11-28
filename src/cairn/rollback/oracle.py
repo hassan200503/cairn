@@ -206,6 +206,7 @@ def avb_rollback_inputs(
     stored: Mapping[int, int] | None = None,
     stored_source: str = "device",
     max_depth: int = 8,
+    catalog_bounds: Mapping[int, tuple[int | None, int | None]] | None = None,
 ) -> RollbackInputs:
     """Extract the rollback counters a VBMeta package declares.
 
@@ -217,6 +218,10 @@ def avb_rollback_inputs(
     limit. A chained partition whose image was not supplied, or whose descriptor
     is malformed, is reported as unresolved instead of being skipped, so it
     cannot be silently treated as safe.
+
+    ``catalog_bounds`` maps a rollback index location to a caller-cited
+    (minimum, maximum) pair for the stored value; a bound is consulted only
+    when the device's stored value is unavailable.
     """
     if max_depth < 1:
         raise RollbackError("max_depth must be positive")
@@ -224,8 +229,14 @@ def avb_rollback_inputs(
     counters: list[RollbackCounter] = []
     unresolved: list[str] = []
 
+    def _bounds(location: int | None) -> tuple[int | None, int | None] | None:
+        if catalog_bounds is None or location is None:
+            return None
+        return catalog_bounds.get(location)
+
     header = image.header
     main_stored = _stored_value(stored, header.rollback_index_location)
+    main_bounds = _bounds(header.rollback_index_location)
     counters.append(
         RollbackCounter(
             name="avb:main",
@@ -236,6 +247,8 @@ def avb_rollback_inputs(
             slot=slot,
             source="avb:vbmeta header",
             stored_source=_stored_source(main_stored, stored_source),
+            catalog_minimum=None if main_bounds is None else main_bounds[0],
+            catalog_maximum=None if main_bounds is None else main_bounds[1],
         )
     )
 
@@ -250,6 +263,7 @@ def avb_rollback_inputs(
         visited=frozenset(),
         depth=0,
         max_depth=max_depth,
+        catalog_bounds=catalog_bounds,
     )
 
     return RollbackInputs(counters=tuple(counters), unresolved=tuple(unresolved))
@@ -267,6 +281,7 @@ def _collect_chain_counters(
     visited: frozenset[str],
     depth: int,
     max_depth: int,
+    catalog_bounds: Mapping[int, tuple[int | None, int | None]] | None = None,
 ) -> None:
     for descriptor in image.chain_partitions:
         name = f"avb:{descriptor.partition_name}"
@@ -288,6 +303,11 @@ def _collect_chain_counters(
             continue
 
         chained_stored = _stored_value(stored, descriptor.rollback_index_location)
+        bounds = (
+            None
+            if catalog_bounds is None
+            else catalog_bounds.get(descriptor.rollback_index_location)
+        )
         counters.append(
             RollbackCounter(
                 name=name,
@@ -298,6 +318,8 @@ def _collect_chain_counters(
                 slot=slot,
                 source=f"avb:chain descriptor {descriptor.partition_name}",
                 stored_source=_stored_source(chained_stored, stored_source),
+                catalog_minimum=None if bounds is None else bounds[0],
+                catalog_maximum=None if bounds is None else bounds[1],
             )
         )
 
@@ -314,6 +336,7 @@ def _collect_chain_counters(
             visited=visited | {descriptor.partition_name},
             depth=depth + 1,
             max_depth=max_depth,
+            catalog_bounds=catalog_bounds,
         )
 
 
@@ -383,6 +406,7 @@ def evaluate_avb_rollback(
     stored: Mapping[int, int] | None = None,
     stored_source: str = "device",
     ota: OtaDowngradeSignal | None = None,
+    catalog_bounds: Mapping[int, tuple[int | None, int | None]] | None = None,
 ) -> RollbackReport:
     """Evaluate the rollback counters declared by a VBMeta package."""
     inputs = avb_rollback_inputs(
@@ -391,6 +415,7 @@ def evaluate_avb_rollback(
         slot=slot,
         stored=stored,
         stored_source=stored_source,
+        catalog_bounds=catalog_bounds,
     )
     return evaluate_rollback(inputs.counters, unresolved=inputs.unresolved, ota=ota)
 

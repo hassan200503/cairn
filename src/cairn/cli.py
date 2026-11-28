@@ -999,6 +999,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="slot the stored values belong to",
     )
     rollback_check.add_argument(
+        "--catalog",
+        type=Path,
+        help="device catalog providing cited rollback bounds for the stored value",
+    )
+    rollback_check.add_argument(
+        "--device-fingerprint",
+        help="device fingerprint sha256 selecting the catalog entry",
+    )
+    rollback_check.add_argument(
+        "--product",
+        help="device product selecting the catalog entry",
+    )
+    rollback_check.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable output",
@@ -2873,6 +2886,13 @@ def _run_catalog(args: argparse.Namespace) -> int:
         print(f"    trusted key: {key_state}")
         if device.expected_lock_state is not None:
             print(f"    expected lock state: {device.expected_lock_state}")
+        for location, bound in sorted(device.rollback_bounds.items()):
+            ends: list[str] = []
+            if bound.minimum is not None:
+                ends.append(f"min {bound.minimum}")
+            if bound.maximum is not None:
+                ends.append(f"max {bound.maximum}")
+            print(f"    rollback bound location {location}: {', '.join(ends)}")
         print(f"    source: {device.source}")
     print(f"packages: {len(catalog.packages)}")
     for package in catalog.packages:
@@ -3076,6 +3096,24 @@ def _run_rollback(args: argparse.Namespace) -> int:
     device_read: DeviceRollbackRead | None = None
     tool: dict[str, object] | None = None
     simulated = False
+    catalog_bounds: dict[int, tuple[int | None, int | None]] = {}
+    bounds_source: str | None = None
+    if getattr(args, "catalog", None) is not None:
+        entry = _resolve_catalog_device(args, "cairn rollback check")
+        if entry is None:
+            return EXIT_USAGE
+        if not entry.rollback_bounds:
+            print(
+                "cairn rollback check: the catalog entry for "
+                f"{entry.product} carries no rollback_bounds to anchor",
+                file=sys.stderr,
+            )
+            return EXIT_FAILED
+        catalog_bounds = {
+            location: (bound.minimum, bound.maximum)
+            for location, bound in entry.rollback_bounds.items()
+        }
+        bounds_source = entry.source
 
     try:
         image = load_vbmeta(args.image)
@@ -3100,6 +3138,7 @@ def _run_rollback(args: argparse.Namespace) -> int:
             slot=args.slot,
             stored=stored,
             stored_source=stored_source,
+            catalog_bounds=catalog_bounds or None,
         )
         if device_read is not None:
             extra = device_read.warnings + device_read.unresolved
@@ -3115,12 +3154,15 @@ def _run_rollback(args: argparse.Namespace) -> int:
             payload["device_read"] = device_read.to_dict()
             payload["tool"] = tool
             payload["simulated"] = simulated
+        if bounds_source is not None:
+            payload["rollback_bounds_source"] = bounds_source
         print(json.dumps(payload, indent=2))
     else:
         _print_rollback_report(
             report,
             chain_supplied=bool(chain_paths),
             device_read=device_read,
+            bounds_source=bounds_source,
         )
     return _exit_code_for_tri(report.state)
 
@@ -3393,6 +3435,7 @@ def _print_rollback_report(
     *,
     chain_supplied: bool,
     device_read: DeviceRollbackRead | None = None,
+    bounds_source: str | None = None,
 ) -> None:
     print(f"findings: {len(report.findings)}")
     for finding in report.findings:
@@ -3409,6 +3452,8 @@ def _print_rollback_report(
         print(
             f"stored index read: {state} ({len(device_read.indexes)} indexes; {device_read.detail})"
         )
+    if bounds_source is not None:
+        print(f"rollback bounds source: {bounds_source} (caller-supplied catalog entry)")
     print(f"verdict: {_tri_label(report.state)} - {_rollback_verdict(report.state)}")
     if chain_supplied:
         print("note: chain images are parsed, not signature-checked; use avb verify --chain")

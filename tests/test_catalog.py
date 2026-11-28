@@ -43,6 +43,7 @@ def _catalog_document() -> dict[str, object]:
                 "trusted_key_sha256": _KEY_SHA,
                 "trusted_key_b64": _KEY_B64,
                 "expected_lock_state": "locked",
+                "rollback_bounds": None,
                 "source": "HF-0001",
                 "notes": "test device",
             }
@@ -224,3 +225,131 @@ def test_avb_key_check_refuses_an_unmatched_device(
     )
     assert exit_code == EXIT_USAGE
     assert "no catalog device matches" in capsys.readouterr().err
+
+
+def test_catalog_parses_rollback_bounds(tmp_path: Path) -> None:
+    document = _catalog_document()
+    document["devices"][0]["rollback_bounds"] = {
+        "1": {"minimum": 2, "maximum": 7},
+        "0": {"maximum": 3},
+    }  # type: ignore[index]
+    catalog = load_catalog(_catalog_file(tmp_path, document))
+    entry = catalog.device_by_fingerprint(_FINGERPRINT)
+    assert entry is not None
+    assert entry.rollback_bounds[1].minimum == 2
+    assert entry.rollback_bounds[1].maximum == 7
+    assert entry.rollback_bounds[0].minimum is None
+    assert entry.rollback_bounds[0].maximum == 3
+
+
+def test_catalog_refuses_unusable_rollback_bounds() -> None:
+    for bad, message in (
+        ({"1": {}}, "at least one end"),
+        ({"1": {"minimum": 5, "maximum": 2}}, "minimum exceeds"),
+        ({"-1": {"maximum": 2}}, "non-negative integer"),
+        ({"1": {"maximum": -3}}, "outside 0"),
+        ({"x": {"maximum": 2}}, "non-negative integer"),
+        ({"1": {"maximum": "2"}}, "must be an integer"),
+        ({"1": {"middle": 2}}, "only 'minimum' and 'maximum'"),
+        ([{"maximum": 2}], "must be an object"),
+    ):
+        document = _catalog_document()
+        document["devices"][0]["rollback_bounds"] = bad  # type: ignore[index]
+        with pytest.raises(CatalogError, match=message):
+            parse_catalog(document)
+
+
+def test_catalog_refuses_an_old_schema_version() -> None:
+    document = _catalog_document()
+    document["schema_version"] = CATALOG_SCHEMA_VERSION - 1
+    with pytest.raises(CatalogError, match="schema_version"):
+        parse_catalog(document)
+
+
+def test_rollback_check_with_a_catalog_bound_proves_safety(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cairn.provenance.avb import load_vbmeta
+
+    package_index = load_vbmeta(FIXTURE_DIR / "signed_vbmeta.img").header.rollback_index
+    document = _catalog_document()
+    document["devices"][0]["rollback_bounds"] = {  # type: ignore[index]
+        "0": {"maximum": package_index}
+    }
+    catalog_path = _catalog_file(tmp_path, document)
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(catalog_path),
+            "--product",
+            "shiba",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == EXIT_OK
+    assert payload["state"] == "TRUE"
+    assert payload["rollback_bounds_source"] == "HF-0001"
+
+
+def test_rollback_check_with_a_catalog_bound_proves_a_downgrade(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from cairn.provenance.avb import load_vbmeta
+
+    package_index = load_vbmeta(FIXTURE_DIR / "signed_vbmeta.img").header.rollback_index
+    document = _catalog_document()
+    document["devices"][0]["rollback_bounds"] = {  # type: ignore[index]
+        "0": {"minimum": package_index + 1}
+    }
+    catalog_path = _catalog_file(tmp_path, document)
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(catalog_path),
+            "--device-fingerprint",
+            _FINGERPRINT,
+        ]
+    )
+    assert exit_code == EXIT_FAILED
+    out = capsys.readouterr().out
+    assert "FALSE" in out
+    assert "rollback bounds source: HF-0001" in out
+
+
+def test_rollback_check_with_a_catalog_entry_without_bounds_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    catalog_path = _catalog_file(tmp_path)
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(catalog_path),
+            "--product",
+            "shiba",
+        ]
+    )
+    assert exit_code == EXIT_FAILED
+    assert "carries no rollback_bounds" in capsys.readouterr().err
+
+
+def test_rollback_check_requires_a_catalog_entry_selector(tmp_path: Path) -> None:
+    exit_code = main(
+        [
+            "rollback",
+            "check",
+            str(FIXTURE_DIR / "signed_vbmeta.img"),
+            "--catalog",
+            str(_catalog_file(tmp_path)),
+        ]
+    )
+    assert exit_code == EXIT_USAGE

@@ -31,7 +31,7 @@ from cairn.approval import (
     new_nonce,
     verify_approval,
 )
-from cairn.catalog import CatalogError, parse_catalog
+from cairn.catalog import CatalogError, DeviceEntry, parse_catalog
 from cairn.core.evidence import Evidence, EvidenceSource
 from cairn.core.tristate import Tri
 from cairn.host.doctor import SOAK_ATTEMPTS_DEFAULT, HostDoctor
@@ -322,26 +322,35 @@ def stage_probe(run: WizardRun, *, runner: ToolRunner, now: datetime) -> StageRe
     )
 
 
-def _anchored_key(run: WizardRun) -> tuple[bytes | None, str | None, str | None]:
-    """Resolve the expected AVB key from a catalog entry (T30).
+def _catalog_entry_for_run(run: WizardRun) -> tuple[DeviceEntry | None, str | None]:
+    """Resolve the catalog device entry for this run, with the catalog sha256.
 
-    The entry is selected by the caller-supplied device fingerprint or, when the
-    device was probed, by the probed fingerprint from the session device. The
-    catalog anchors *which key* is expected and is caller-supplied input, never
-    device evidence, so the stage keeps its warning.
+    The entry is selected by the caller-supplied device fingerprint or, when
+    the device was probed, by the probed fingerprint from the session device.
     """
     options = run.options
-    if options.catalog is None or options.key is not None:
-        return None, None, None
+    if options.catalog is None:
+        return None, None
     fingerprint = options.device_fingerprint
     if fingerprint is None and run.device is not None:
         fingerprint = run.device.fingerprint_sha256
     if fingerprint is None:
-        return None, None, None
+        return None, None
     catalog_bytes = options.catalog.read_bytes()
     catalog_sha256 = hashlib.sha256(catalog_bytes).hexdigest()
     catalog = parse_catalog(json.loads(catalog_bytes.decode("utf-8")))
-    entry = catalog.device_by_fingerprint(fingerprint)
+    return catalog.device_by_fingerprint(fingerprint), catalog_sha256
+
+
+def _anchored_key(run: WizardRun) -> tuple[bytes | None, str | None, str | None]:
+    """Resolve the expected AVB key from a catalog entry (T30).
+
+    The catalog anchors *which key* is expected and is caller-supplied input,
+    never device evidence, so the stage keeps its warning.
+    """
+    if run.options.catalog is None or run.options.key is not None:
+        return None, None, None
+    entry, catalog_sha256 = _catalog_entry_for_run(run)
     if entry is None:
         return None, None, catalog_sha256
     if entry.trusted_key is None:
@@ -445,7 +454,22 @@ def stage_rollback(run: WizardRun, *, runner: ToolRunner, now: datetime) -> Stag
             StageOutcome.SKIPPED,
             "no VBMeta image was supplied; rollback counters were not evaluated",
         )
-    if not options.stored and not options.simulate:
+    catalog_bounds: dict[int, tuple[int | None, int | None]] = {}
+    bounds_source: str | None = None
+    if options.catalog is not None:
+        try:
+            entry, _ = _catalog_entry_for_run(run)
+        except (OSError, CatalogError, ValueError) as exc:
+            return StageResult(
+                "rollback", StageOutcome.BLOCKED, f"catalog could not be read: {exc}"
+            )
+        if entry is not None and entry.rollback_bounds:
+            catalog_bounds = {
+                location: (bound.minimum, bound.maximum)
+                for location, bound in entry.rollback_bounds.items()
+            }
+            bounds_source = entry.source
+    if not options.stored and not options.simulate and not catalog_bounds:
         prepared = _ensure_prepared(run, runner)
         if prepared is None or run.device is None or run.device.source == "caller":
             return StageResult(
@@ -459,6 +483,11 @@ def stage_rollback(run: WizardRun, *, runner: ToolRunner, now: datetime) -> Stag
     if options.stored:
         stored = options.stored
         stored_source = "caller"
+    elif catalog_bounds:
+        # Catalog bounds alone can prove safety or a downgrade (STATE.md,
+        # SR-004); no device read is needed for a verdict in that case.
+        stored = None
+        stored_source = "catalog bounds"
     else:
         prepared = _ensure_prepared(run, runner)
         if prepared is None:
@@ -483,6 +512,7 @@ def stage_rollback(run: WizardRun, *, runner: ToolRunner, now: datetime) -> Stag
             slot=options.rollback_slot,
             stored=stored,
             stored_source=stored_source,
+            catalog_bounds=catalog_bounds or None,
         )
     except RollbackError as exc:
         return StageResult("rollback", StageOutcome.BLOCKED, str(exc))
@@ -495,7 +525,12 @@ def stage_rollback(run: WizardRun, *, runner: ToolRunner, now: datetime) -> Stag
         report.state,
         "; ".join(report.reasons) or "rollback counters were evaluated",
         report.to_dict(),
-        report.warnings,
+        report.warnings
+        + (
+            ("rollback bounds came from a caller-supplied catalog entry",)
+            if bounds_source is not None
+            else ()
+        ),
     )
     run.rollback_check = check
     if report.state is Tri.FALSE:
@@ -506,6 +541,9 @@ def stage_rollback(run: WizardRun, *, runner: ToolRunner, now: datetime) -> Stag
         outcome = StageOutcome.PASS
     else:
         outcome = StageOutcome.BLOCKED
+    payload = report.to_dict() | {"stored_source": stored_source, "simulated": simulated}
+    if bounds_source is not None:
+        payload["rollback_bounds_source"] = bounds_source
     return StageResult(
         stage="rollback",
         outcome=outcome,
@@ -513,7 +551,7 @@ def stage_rollback(run: WizardRun, *, runner: ToolRunner, now: datetime) -> Stag
         input_fingerprint=rollback_fingerprint(run.options),
         evidence_ids=check.evidence_ids,
         warnings=check.warnings,
-        payload=report.to_dict() | {"stored_source": stored_source, "simulated": simulated},
+        payload=payload,
     )
 
 

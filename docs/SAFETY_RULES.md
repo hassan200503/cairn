@@ -116,8 +116,17 @@ catalog proof only. No override (ADR-021).
 absent variable, conflict, malformed or empty value, truncated output, or failed
 command is `UNKNOWN`. OEM signals such as `ap-ar-s` are not AVB locations and are
 never mapped to one (ADR-022, KU-030).
+**Catalog bounds:** a device catalog entry may carry per-location cited bounds
+(`rollback_bounds`, schema v2). A bound is consulted only when the stored value
+is unavailable: a maximum at or below the package value proves TRUE, a minimum
+above it proves FALSE, and an inconclusive bound stays UNKNOWN. A stored read
+outranks a bound; with a stored read present, a bound violation is only a
+warning. A bound is caller-supplied anchoring input, never device evidence
+(ADR-013), and every catalog entry must cite a source (KU-031).
 **Test:** known-safe, definitely-lower, unknown index, per-slot index difference,
-OEM counter unknown, vendor variable absent, conflicting values, malformed value.
+OEM counter unknown, vendor variable absent, conflicting values, malformed value,
+catalog bound proves safety, catalog bound proves a downgrade, inconclusive bound,
+stored read outranks a bound.
 
 ### SR-005 - Battery threshold
 

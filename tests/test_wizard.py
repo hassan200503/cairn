@@ -328,6 +328,7 @@ def _catalog_file(tmp_path, fingerprint: str, *, with_key: bool = True) -> Path:
                 "trusted_key_sha256": hashlib.sha256(key).hexdigest(),
                 "trusted_key_b64": base64.b64encode(key).decode("ascii") if with_key else None,
                 "expected_lock_state": "locked",
+                "rollback_bounds": None,
                 "source": "HF-0001",
                 "notes": None,
             }
@@ -415,3 +416,33 @@ def test_wizard_avb_stage_ignores_the_catalog_without_a_fingerprint(tmp_path) ->
     assert result.outcome is StageOutcome.BLOCKED
     assert "trusted_key_source" not in result.payload
     assert "catalog_sha256" not in result.payload
+
+
+def test_wizard_rollback_stage_applies_catalog_bounds(tmp_path) -> None:
+    from cairn.provenance.avb import load_vbmeta
+    from cairn.wizard.stages import WizardOptions, WizardRun, stage_rollback
+
+    fingerprint = _hex("device")
+    catalog = _catalog_file(tmp_path, fingerprint)
+    vbmeta = Path(__file__).parent / "fixtures" / "avb" / "signed_vbmeta.img"
+    package_index = load_vbmeta(vbmeta).header.rollback_index
+    # rewrite the catalog with a bound that proves safety for this package
+    document = json.loads(catalog.read_text(encoding="utf-8"))
+    document["devices"][0]["rollback_bounds"] = {"0": {"maximum": package_index}}
+    catalog.write_text(json.dumps(document), encoding="utf-8")
+
+    options = WizardOptions(
+        package=tmp_path / "factory.zip",
+        index=tmp_path / "index.json",
+        state=tmp_path / "wizard.json",
+        device_fingerprint=fingerprint,
+        vbmeta=vbmeta,
+        catalog=catalog,
+    )
+    run = WizardRun(options=options)
+    run.vbmeta = load_vbmeta(vbmeta)
+    result = stage_rollback(run, runner=None, now=datetime.now(UTC))
+
+    assert result.outcome is StageOutcome.PASS
+    assert result.payload["rollback_bounds_source"] == "HF-0001"
+    assert any("catalog entry" in w for w in result.warnings)

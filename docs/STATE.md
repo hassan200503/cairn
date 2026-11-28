@@ -10,15 +10,19 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, release packaging slice: version 0.2.0,
-`install.ps1` / `install.sh` installer scripts (isolated `uv tool` install), a
-full README overhaul with real-output screenshots under `docs/screenshots/`, a
-`[0.2.0]` CHANGELOG section, and a GitHub release with built wheel and sdist.
-No code behavior changed in this slice. The T29/T30 device catalog
-(`cairn.catalog`) with `cairn catalog check`, `cairn avb key-check --catalog`,
-and `cairn wizard --catalog` anchoring landed just before it; the vault is
-format v2 (ADR-029) with `docs/REVIEW_BUNDLE.md` prepared for KU-032. The vault
-and drill remain simulator-only and externally unreviewed.
+**Last updated:** 2026-11-27, after the v0.2.0 release and the catalog
+rollback-bounds slice: the catalog is schema v2 — a device entry may carry
+cited per-location `rollback_bounds`, the rollback oracle consults a bound only
+when the stored value is unavailable (maximum proves safety, minimum proves a
+downgrade, inconclusive stays UNKNOWN, a stored read outranks a bound), and the
+bounds are wired into `cairn rollback check --catalog` and `cairn wizard
+--catalog` with the entry's source printed as the citation. v0.2.0 added the
+installer scripts, a README overhaul with real-output screenshots, and a tagged
+GitHub release. The T29/T30 device catalog (`cairn.catalog`) with `cairn
+catalog check`, `cairn avb key-check --catalog`, and `cairn wizard --catalog`
+anchoring landed just before; the vault is format v2 (ADR-029) with
+`docs/REVIEW_BUNDLE.md` prepared for KU-032. The vault and drill remain
+simulator-only and externally unreviewed.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -128,7 +132,7 @@ Design notes, in the order the reader should meet them:
 | `cairn avb key-check IMAGE [--key KEY \| --catalog CATALOG (--device-fingerprint HEX \| --product NAME)] --lock-state STATE` | contextual expected-key check; the trusted key is caller-supplied or catalog-anchored (the catalog entry's source is printed), the lock state is caller-supplied, not device evidence | 0 TRUE / 1 FALSE / 3 UNKNOWN |
 | `cairn catalog check CATALOG` | validate a device catalog (strict schema, source citations required, key/sha256 cross-check) and print its entries | 0 / 1 |
 | `cairn rollback read [--fastboot PATH] [--serial SERIAL] [--simulate TRANSCRIPT]` | read vendor-reported stored rollback indexes with one read-only `getvar all` | 0 complete / 2 usage / 3 UNKNOWN |
-| `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device]` | compare package rollback counters with caller-supplied or device-read stored values | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
+| `cairn rollback check IMAGE [--chain NAME=PATH] [--stored LOCATION=VALUE] [--device] [--catalog CATALOG (--device-fingerprint HEX \| --product NAME)]` | compare package rollback counters with caller-supplied, device-read, or catalog-bounded stored values; the catalog entry's source is printed as the citation | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn execute --state SESSION --simulate TRANSCRIPT --token TOKEN --key KEY (--nonce N --device-fingerprint HEX \| nothing for a probed session) [--journal PATH] [--staging-dir DIR]` | execute an approved, safety-gated plan in the transcript simulator only, with a write-ahead journal; real fastboot binaries are refused (ADR-027) | 0 complete / 1 failed / 2 usage / 3 blocked |
 | `cairn recovery backup --partition P --asset IMG --out VAULT --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F]` | encrypt a critical partition image into a device-bound vault; raw serials are never accepted, only their sha256 (ADR-028) | 0 / 1 refused / 2 usage |
 | `cairn recovery verify VAULT [--passphrase-file F]` | verify a vault's MAC and recorded plaintext hashes | 0 verified / 1 tampered or wrong passphrase |
@@ -361,15 +365,14 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 627 passed, 6 skipped
+uv run pytest -q               # 640 passed, 6 skipped
 ```
 
-The latest CI run is `46090782794` for the T21/T24 super-oracle slice merged
-through pull request [#10](https://github.com/hassan200503/cairn/pull/10)
-(merge `dc0ed9f`) and is green, including the lpmake differential job (10
-passed, 0 skipped). The T22/T23 capture slice postdates that run; its CI run
-must be green before merge. The 627-test baseline above was confirmed locally
-on the T29/T30 slice.
+The latest CI run is the v0.2.0 packaging slice (pull request
+[#16](https://github.com/hassan200503/cairn/pull/16), merge `1170358`) and is
+green across all seven jobs. The catalog rollback-bounds slice postdates that
+run; its CI run must be green before merge. The 640-test baseline above was
+confirmed locally on the catalog rollback-bounds slice.
 
 The six local skips are environmental, not gaps in coverage:
 
@@ -428,10 +431,10 @@ These are the reasons the remaining work cannot simply be "finished":
   yet.
 - **No device-bound lock/key anchor.** `avb key-check` consumes caller-supplied
   inputs only; rung 6 remains unimplemented (KU-029).
-- **No catalog-bound safety preflight.** `cairn plan` now evaluates all six current
-  safety rules, but it has only package provenance evidence; absent identity, AVB,
-  rollback, tool, and lock/key facts remain UNKNOWN and it is therefore
-  non-executable (KU-031).
+- **No catalog-bound safety preflight.** `cairn plan` evaluates its available
+  provenance evidence, and the catalog now anchors AVB keys and rollback
+  bounds, but absent identity, tool, and lock/key facts remain UNKNOWN and
+  `cairn plan` is therefore non-executable (KU-031).
 - **No external review of the recovery vault.** The vault crypto (format v2,
   ADR-029) and the M6 drill have only this project's own review and tests;
   external sign-off is an explicit T15 acceptance condition (KU-032), and no
@@ -504,9 +507,11 @@ push, confirm CI green.
    citation into the stage payload (which the approval bundle's evidence
    snapshot covers). The catalog is caller-supplied anchoring input, never
    device evidence (ADR-013); the lock state still comes from the caller or a
-   device probe. Remaining work: real packages and scrubbed device probes
-   filling a real catalog, catalog file signing, and binding
-   SR-001/003/004/012 to catalog evidence.
+   device probe. The catalog rollback-bounds slice bound SR-004's stored-value
+   question to catalog evidence: a cited per-location bound proves safety or a
+   downgrade when the device read is unavailable. Remaining work: real packages
+   and scrubbed device probes filling a real catalog, catalog file signing, and
+   binding SR-001/003/012 to catalog evidence.
 6. **T15 — Recovery Kit and the M6 gate (landed, simulator-only).** The threat
    model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
    readiness checks, the encrypted device-bound vault with
