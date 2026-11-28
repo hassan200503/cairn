@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cairn — Fail-safe flashing workbench</title>
+<style>
+:root{
+  --bg:#0b1220;--panel:#111a2c;--panel2:#0e1626;--line:#1e2a44;
+  --text:#dbe4f3;--muted:#7c8aa5;--accent:#3b82f6;
+  --green:#22c55e;--green-bg:#0c2a1a;--red:#ef4444;--red-bg:#31110f;
+  --amber:#f59e0b;--amber-bg:#2e2306;--gray:#64748b;--gray-bg:#151d2e;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:14px 22px;
+  background:var(--panel2);border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0;letter-spacing:.4px}
+header .mark{color:var(--green);font-weight:600}
+.banner{margin-left:auto;font-size:12px;color:var(--amber);
+  border:1px solid var(--amber);border-radius:6px;padding:4px 10px}
+nav{display:flex;gap:4px;padding:10px 22px 0;background:var(--panel2);
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+nav button{background:none;border:none;color:var(--muted);padding:8px 14px;
+  font-size:13.5px;cursor:pointer;border-bottom:2px solid transparent}
+nav button.active{color:var(--text);border-bottom-color:var(--accent)}
+nav button:hover{color:var(--text)}
+main{max-width:1060px;margin:0 auto;padding:22px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px 18px;margin-bottom:16px}
+.card h2{margin:0 0 10px;font-size:15px}
+.card h2 .sub{font-weight:400;color:var(--muted);font-size:12.5px;margin-left:8px}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+input,select,textarea{width:100%;background:var(--panel2);color:var(--text);
+  border:1px solid var(--line);border-radius:6px;padding:7px 10px;font:inherit}
+input:focus{outline:1px solid var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0 16px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+button.run{background:var(--accent);border:none;color:#fff;font-weight:600;
+  padding:9px 20px;border-radius:7px;cursor:pointer;margin-top:12px;font-size:13.5px}
+button.run:hover{filter:brightness(1.1)}
+button.run:disabled{opacity:.5;cursor:wait}
+.pill{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 10px;
+  border-radius:999px;letter-spacing:.4px}
+.pill.TRUE,.pill.PASS,.pill.ok{background:var(--green-bg);color:var(--green);
+  border:1px solid var(--green)}
+.pill.FALSE,.pill.FAIL{background:var(--red-bg);color:var(--red);border:1px solid var(--red)}
+.pill.UNKNOWN,.pill.BLOCKED{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber)}
+.pill.SKIPPED,.pill.SIMULATED,.pill.info{background:var(--gray-bg);color:var(--gray);border:1px solid var(--gray)}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:600;font-size:12px}
+pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+  padding:12px;overflow:auto;font:12px/1.55 Consolas,monospace;max-height:420px}
+.step{display:flex;gap:10px;align-items:baseline;padding:7px 0;
+  border-bottom:1px solid var(--line)}
+.step:last-child{border-bottom:none}
+.step .name{min-width:210px;font-weight:600}
+.step .detail{color:var(--muted);font-size:12.5px}
+.err{color:var(--red);background:var(--red-bg);border:1px solid var(--red);
+  border-radius:8px;padding:10px 14px;margin-bottom:14px;white-space:pre-wrap}
+.muted{color:var(--muted);font-size:12.5px}
+.verdict{font-size:15px;font-weight:700;margin-top:10px}
+.verdict.TRUE{color:var(--green)}.verdict.FALSE{color:var(--red)}
+.verdict.UNKNOWN{color:var(--amber)}
+.kv{display:grid;grid-template-columns:170px 1fr;gap:3px 12px;font-size:13px}
+.kv .k{color:var(--muted)}
+.hidden{display:none}
+#overview .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px}
+.stat .v{font-size:16px;font-weight:700;margin-top:2px}
+footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mark">&#9650;</span> CAIRN <span class="muted" style="font-weight:400">workbench</span></h1>
+  <span class="pill info" id="ver">v?</span>
+  <span class="banner">Writes are simulator-only (ADR-027) &#8226; loopback server</span>
+</header>
+<nav id="tabs">
+  <button data-t="overview" class="active">Overview</button>
+  <button data-t="doctor">Host Doctor</button>
+  <button data-t="device">Device Probe</button>
+  <button data-t="wizard">Preflight Wizard</button>
+  <button data-t="checks">Checks</button>
+  <button data-t="recovery">Recovery</button>
+  <button data-t="execute">Execute (SIM)</button>
+</nav>
+<main>
+
+<section id="overview">
+  <div class="card"><h2>System</h2><div class="facts" id="sysfacts"></div>
+    <p class="muted" id="boundary" style="margin-bottom:0"></p></div>
+  <div class="card"><h2>Verification levels<span class="sub">every "verified" is stated at a level</span></h2>
+    <table id="leveltable"><tr><th>Level</th><th>Meaning</th></tr></table></div>
+  <div class="card"><h2>What this dashboard does</h2>
+    <p>Green <span class="pill TRUE">TRUE</span> = proven by evidence.
+       Red <span class="pill FALSE">FALSE</span> = an unsafe condition, never overridable.
+       Amber <span class="pill UNKNOWN">UNKNOWN</span> = not known, and unknown blocks.
+       The preflight wizard runs the full pipeline read-only; the executor writes
+       only into the transcript simulator until the M6 external reviews pass.</p></div>
+</section>
+
+<section id="doctor" class="hidden">
+  <div class="card"><h2>Host Doctor<span class="sub">read-only host checks</span></h2>
+    <div class="row2">
+      <div><label>fastboot path (optional)</label><input id="doc_fastboot" placeholder="auto-detect"></div>
+      <div><label>serial (optional)</label><input id="doc_serial"></div>
+    </div>
+    <div class="row2">
+      <div><label>link soak attempts (0 to skip)</label><input id="doc_soak" type="number" value="3"></div>
+      <div><label>simulate transcript (optional)</label><input id="doc_sim" placeholder="e.g. transcripts/probe.json"></div>
+    </div>
+    <button class="run" onclick="runDoctor()">Run host checks</button></div>
+  <div id="doc_out"></div>
+</section>
+
+<section id="device" class="hidden">
+  <div class="card"><h2>Device Probe<span class="sub">read-only getvar; never writes</span></h2>
+    <div class="row2">
+      <div><label>fastboot path (optional)</label><input id="pr_fastboot"></div>
+      <div><label>serial (optional)</label><input id="pr_serial"></div>
+    </div>
+    <label>simulate transcript (optional — replays a recorded device)</label>
+    <input id="pr_sim" placeholder="transcripts/probe.json">
+    <button class="run" onclick="runProbe()">Probe device</button></div>
+  <div id="pr_out"></div>
+</section>
+
+<section id="wizard" class="hidden">
+  <div class="card"><h2>Preflight Wizard<span class="sub">resumable, read-only; the hero path</span></h2>
+    <div class="grid">
+      <div><label>package (factory zip) *</label><input id="wz_package" placeholder="factory.zip"></div>
+      <div><label>hash index *</label><input id="wz_index" placeholder="index.json"></div>
+      <div><label>session state *</label><input id="wz_state" placeholder="session.json"></div>
+    </div>
+    <div class="grid">
+      <div><label>vbmeta image</label><input id="wz_vbmeta" placeholder="vbmeta.img"></div>
+      <div><label>device catalog</label><input id="wz_catalog" placeholder="catalog.json"></div>
+      <div><label>catalog key file</label><input id="wz_catalog_key"></div>
+      <div><label>catalog signature</label><input id="wz_catalog_signature"></div>
+    </div>
+    <div class="grid">
+      <div><label>fastboot path</label><input id="wz_fastboot"></div>
+      <div><label>serial</label><input id="wz_serial"></div>
+      <div><label>simulate transcript</label><input id="wz_sim"></div>
+      <div><label>lock state</label><select id="wz_lock"><option value=""></option>
+        <option>locked</option><option>unlocked</option><option>unknown</option></select></div>
+    </div>
+    <div class="grid">
+      <div><label>device fingerprint (hex64, anchors catalog)</label><input id="wz_fingerprint"></div>
+      <div><label>expected key (avbpubkey)</label><input id="wz_key"></div>
+      <div><label>approval token</label><input id="wz_approval"></div>
+      <div><label>approval key</label><input id="wz_approval_key"></div>
+    </div>
+    <div class="row2">
+      <div><label>stored rollback (LOCATION=VALUE, comma-separated)</label><input id="wz_stored" placeholder="0=1,3=3"></div>
+      <div><label>chain images (NAME=PATH, comma-separated)</label><input id="wz_chain" placeholder="boot=boot.img"></div>
+    </div>
+    <label><input type="checkbox" id="wz_resume" style="width:auto"> resume existing session</label>
+    <button class="run" onclick="runWizard()">Run preflight</button></div>
+  <div id="wz_out"></div>
+</section>
+
+<section id="checks" class="hidden">
+  <div class="card"><h2>AVB key check<span class="sub">trust chain under a lock-state context</span></h2>
+    <div class="row2">
+      <div><label>vbmeta image</label><input id="av_image" placeholder="vbmeta.img"></div>
+      <div><label>lock state</label><select id="av_lock"><option>locked</option>
+        <option>unlocked</option><option>unknown</option></select></div>
+    </div>
+    <div class="row2">
+      <div><label>trusted key (avbpubkey)</label><input id="av_key"></div>
+      <div><label>catalog</label><input id="av_catalog"></div>
+    </div>
+    <div class="row2">
+      <div><label>product (selects catalog entry)</label><input id="av_product"></div>
+      <div><label>device fingerprint (hex64)</label><input id="av_fingerprint"></div>
+    </div>
+    <button class="run" onclick="runAvb()">Check key trust</button></div>
+  <div class="card"><h2>Rollback check<span class="sub">can this package lower the anti-rollback counter?</span></h2>
+    <div class="row2">
+      <div><label>vbmeta image</label><input id="rb_image"></div>
+      <div><label>catalog (bounds)</label><input id="rb_catalog"></div>
+    </div>
+    <div class="row2">
+      <div><label>stored indexes (LOCATION=VALUE, comma-separated)</label><input id="rb_stored" placeholder="0=1"></div>
+      <div><label>simulate transcript (device read)</label><input id="rb_sim"></div>
+    </div>
+    <button class="run" onclick="runRollback()">Check rollback</button></div>
+  <div class="card"><h2>Virtual A/B<span class="sub">read-only merge-state gate (SR-010)</span></h2>
+    <div class="row2">
+      <div><label>simulate transcript</label><input id="vab_sim"></div>
+      <div><label>fastboot path</label><input id="vab_fastboot"></div>
+    </div>
+    <button class="run" onclick="runVab()">Check merge state</button></div>
+  <div class="card"><h2>Catalog<span class="sub">source-cited anchoring records</span></h2>
+    <div class="row2">
+      <div><label>catalog file</label><input id="cat_file" placeholder="catalog.json"></div>
+      <div><label>action</label><select id="cat_action"><option>check</option>
+        <option>sign</option><option>verify</option></select></div>
+    </div>
+    <div class="row2">
+      <div><label>key file (sign/verify)</label><input id="cat_key"></div>
+      <div><label>signature file (optional)</label><input id="cat_sig"></div>
+    </div>
+    <button class="run" onclick="runCatalog()">Run catalog action</button></div>
+  <div id="chk_out"></div>
+</section>
+
+<section id="recovery" class="hidden">
+  <div class="card"><h2>Recovery backup<span class="sub">encrypted, device-bound vault (SR-009)</span></h2>
+    <div class="grid">
+      <div><label>partition *</label><input id="bk_partition" placeholder="persist"></div>
+      <div><label>asset image *</label><input id="bk_asset" placeholder="persist.img"></div>
+      <div><label>vault output *</label><input id="bk_vault" placeholder="vault.json"></div>
+      <div><label>passphrase file *</label><input id="bk_pass" type="password" placeholder="path or paste below"></div>
+    </div>
+    <div class="grid">
+      <div><label>product *</label><input id="bk_product" placeholder="shiba"></div>
+      <div><label>serial sha256 (hex64) *</label><input id="bk_serial"></div>
+      <div><label>device fingerprint sha256 *</label><input id="bk_fp"></div>
+    </div>
+    <button class="run" onclick="runBackup()">Create vault backup</button></div>
+  <div class="card"><h2>M6 recovery drill<span class="sub">SIMULATED: proves backup, restore, and the cross-device refusal</span></h2>
+    <div class="grid">
+      <div><label>partition *</label><input id="dr_partition"></div>
+      <div><label>asset image *</label><input id="dr_asset"></div>
+      <div><label>expected asset sha256 *</label><input id="dr_sha"></div>
+      <div><label>vault *</label><input id="dr_vault"></div>
+    </div>
+    <div class="grid">
+      <div><label>product *</label><input id="dr_product"></div>
+      <div><label>serial sha256 *</label><input id="dr_serial"></div>
+      <div><label>device fingerprint *</label><input id="dr_fp"></div>
+      <div><label>passphrase file *</label><input id="dr_pass" type="password"></div>
+    </div>
+    <div class="grid">
+      <div><label>other serial sha256 (must be refused) *</label><input id="dr_oserial"></div>
+      <div><label>other fingerprint *</label><input id="dr_ofp"></div>
+      <div><label>last-resort recovery path *</label><input id="dr_lr" placeholder="EDL 9008 + signed factory image"></div>
+      <div><label>simulate transcript *</label><input id="dr_sim"></div>
+    </div>
+    <button class="run" onclick="runDrill()">Run drill (SIMULATED)</button>
+    <p class="muted">The drill writes only into the transcript simulator. Passing it is
+    necessary but not sufficient: the real M6 gate also requires the external
+    crypto and safety reviews (KU-032).</p></div>
+  <div id="rec_out"></div>
+</section>
+
+<section id="execute" class="hidden">
+  <div class="card"><h2>Execute approved plan<span class="sub">transcript simulator only (ADR-027)</span></h2>
+    <div class="grid">
+      <div><label>wizard session state *</label><input id="ex_state" placeholder="session.json"></div>
+      <div><label>approval token *</label><input id="ex_token"></div>
+      <div><label>approval key *</label><input id="ex_key"></div>
+      <div><label>simulate transcript *</label><input id="ex_sim"></div>
+    </div>
+    <div class="grid">
+      <div><label>nonce (if session has no probed binding)</label><input id="ex_nonce"></div>
+      <div><label>device fingerprint (same)</label><input id="ex_fp"></div>
+      <div><label>journal path (optional)</label><input id="ex_journal"></div>
+      <div><label>timeout seconds</label><input id="ex_timeout" type="number" value="600"></div>
+    </div>
+    <button class="run" onclick="runExecute()">Execute in simulator</button>
+    <p class="muted">Every write is journaled, hash-chained, and labelled SIMULATED.
+    A real fastboot binary is refused here by construction.</p></div>
+  <div id="ex_out"></div>
+</section>
+
+</main>
+<footer>Cairn — mark the path, verify the state. UNKNOWN blocks; FALSE is never overridable.</footer>
+<script>
+const $=id=>document.getElementById(id);
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  document.querySelectorAll("main section").forEach(s=>s.classList.add("hidden"));
+  $(b.dataset.t).classList.remove("hidden");
+});
+async function api(name,body){
+  const r=await fetch("/api/"+name,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body||{})});
+  return await r.json();
+}
+const pill=s=>s?`<span class="pill ${s}">${s}</span>`:"";
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const list=v=>(v||"").split(",").map(x=>x.trim()).filter(Boolean);
+
+(async()=>{const s=await api("state");
+  if(s.error){$("overview").innerHTML=`<div class="err">${esc(s.error)}</div>`;return;}
+  $("ver").textContent="v"+s.version;
+  $("boundary").textContent=s.boundary;
+  $("sysfacts").innerHTML=[["Platform",s.platform],["Python",s.python]]
+    .map(([k,v])=>`<div class="stat"><div class="muted">${k}</div><div class="v">${esc(v)}</div></div>`).join("");
+  $("leveltable").innerHTML=Object.entries(s.levels)
+    .map(([k,v])=>`<tr><td><b>${k}</b></td><td>${esc(v)}</td></tr>`).join("");
+})();
+
+function out(id,html){$(id).innerHTML=html;}
+function showError(id,msg){out(id,`<div class="err">${esc(msg)}</div>`);}
+function card(title,inner){return `<div class="card"><h2>${title}</h2>${inner}</div>`;}
+
+async function runDoctor(){
+  out("doc_out","<div class='card muted'>running…</div>");
+  const r=await api("doctor",{fastboot:$("doc_fastboot").value||null,
+    serial:$("doc_serial").value||null,soak:+$("doc_soak").value||0,
+    simulate:$("doc_sim").value||null});
+  if(r.error)return showError("doc_out",r.error);
+  const rows=(r.checks||[]).map(c=>`<div class="step"><span class="name">${esc(c.name)}</span>
+    ${pill(c.state)}<span class="detail">${esc(c.detail)}</span></div>`).join("");
+  out("doc_out",card("Host Doctor "+pill(r.verdict)+
+    (r.simulated?" <span class='pill SIMULATED'>SIMULATED</span>":""),
+    rows+(r.soak?`<p class="muted">link soak: ${r.soak.attempts} attempts, ${r.soak.failures} failures, max ${r.soak.max_ms} ms</p>`:"")));
+}
+async function runProbe(){
+  out("pr_out","<div class='card muted'>probing…</div>");
+  const r=await api("probe",{fastboot:$("pr_fastboot").value||null,
+    serial:$("pr_serial").value||null,simulate:$("pr_sim").value||null});
+  if(r.error)return showError("pr_out",r.error);
+  const rows=(r.facts||[]).map(f=>`<tr><td>${esc(f.name)}</td><td>${pill(f.state)}</td>
+    <td>${esc(f.value??"—")}</td><td class="muted">${esc(f.detail)}</td></tr>`).join("");
+  out("pr_out",card("Probe "+(r.simulated?"<span class='pill SIMULATED'>SIMULATED</span>":pill(r.tool_ok?"TRUE":"FALSE")),
+    `<table><tr><th>variable</th><th>state</th><th>value</th><th>detail</th></tr>${rows}</table>`));
+}
+function wizardBody(){
+  const stored=list($("wz_stored").value),chain=list($("wz_chain").value);
+  return {package:$("wz_package").value,index:$("wz_index").value,state:$("wz_state").value,
+    fastboot:$("wz_fastboot").value||null,serial:$("wz_serial").value||null,
+    simulate:$("wz_sim").value||null,device_fingerprint:$("wz_fingerprint").value||null,
+    vbmeta:$("wz_vbmeta").value||null,catalog:$("wz_catalog").value||null,
+    catalog_key:$("wz_catalog_key").value||null,catalog_signature:$("wz_catalog_signature").value||null,
+    lock_state:$("wz_lock").value||null,key:$("wz_key").value||null,
+    approval:$("wz_approval").value||null,approval_key:$("wz_approval_key").value||null,
+    stored,chain,resume:$("wz_resume").checked};
+}
+function renderSession(s){
+  const st=(s.stages||[]).map(g=>`<div class="step"><span class="name">${esc(g.stage)}</span>
+    ${pill(g.outcome)}<span class="detail">${esc(g.detail)}</span></div>`).join("");
+  const v=s.pre_safety?s.pre_safety.verdict:null;
+  let html=card("Stages",st);
+  if(v)html+=card("Safety verdict",`<div class="verdict ${v}">${v}</div>`+
+    `<p class="muted">${esc((s.pre_safety.reasons||[]).join("; "))}</p>`);
+  html+=`<div class="card"><span class="pill ${s.outcome}">outcome: ${esc(s.outcome)}</span>
+    <span class="muted" style="margin-left:10px">session: ${esc(s.state_path||"")}</span></div>`;
+  out("wz_out",html);
+}
+async function runWizard(){
+  out("wz_out","<div class='card muted'>running preflight…</div>");
+  const r=await api("wizard",wizardBody());
+  if(r.error)return showError("wz_out",r.error);
+  renderSession(r);
+}
+async function runAvb(){
+  out("chk_out","<div class='card muted'>checking…</div>");
+  const r=await api("avb",{action:"key-check",image:$("av_image").value,
+    lock_state:$("av_lock").value,key:$("av_key").value||null,
+    catalog:$("av_catalog").value||null,product:$("av_product").value||null,
+    device_fingerprint:$("av_fingerprint").value||null});
+  if(r.error)return showError("chk_out",r.error);
+  out("chk_out",card("Key trust",`<div class="verdict ${r.state}">${r.state}</div>
+    <p class="muted">${esc(r.reason||"")}</p>
+    ${r.trusted_key_source?`<p class="muted">key source: ${esc(r.trusted_key_source)}</p>`:""}`));
+}
+async function runRollback(){
+  out("chk_out","<div class='card muted'>checking…</div>");
+  const r=await api("rollback",{action:"check",image:$("rb_image").value,
+    catalog:$("rb_catalog").value||null,stored:list($("rb_stored").value),
+    simulate:$("rb_sim").value||null});
+  if(r.error)return showError("chk_out",r.error);
+  const rows=(r.findings||[]).map(f=>`<div class="step"><span class="name">${esc(f.counter)}</span>
+    ${pill(f.state)}<span class="detail">${esc(f.reason)}</span></div>`).join("");
+  out("chk_out",card("Rollback",rows+`<div class="verdict ${r.state}">${r.state}</div>`+
+    (r.rollback_bounds_source?`<p class="muted">bounds source: ${esc(r.rollback_bounds_source)}</p>`:"")+
+    (r.simulated?`<span class="pill SIMULATED">SIMULATED</span>`:"")));
+}
+async function runVab(){
+  out("chk_out","<div class='card muted'>reading…</div>");
+  const r=await api("vab",{action:"status",simulate:$("vab_sim").value||null,
+    fastboot:$("vab_fastboot").value||null});
+  if(r.error)return showError("chk_out",r.error);
+  out("chk_out",card("Merge state (SR-010)",`<div class="kv">
+    <span class="k">snapshot-update-status</span><span>${esc(r.value??"unread")}</span>
+    <span class="k">gate</span><span>${pill(r.state)}</span></div>
+    <p class="muted">${esc(r.detail||"")}</p>`));
+}
+async function runCatalog(){
+  out("chk_out","<div class='card muted'>running…</div>");
+  const r=await api("catalog",{action:$("cat_action").value,catalog:$("cat_file").value,
+    key:$("cat_key").value||null,signature:$("cat_sig").value||null});
+  if(r.error)return showError("chk_out",r.error);
+  if(r.devices){out("chk_out",card("Catalog entries",r.devices.map(d=>
+    `<div class="step"><span class="name">${esc(d.product)}</span>
+     <span class="detail">${esc(d.fingerprint_sha256.slice(0,16))}… · ${esc(d.source)}</span></div>`).join("")+
+    `<p class="muted">${r.packages.length} package entries</p>`));}
+  else out("chk_out",card("Catalog",`<span class="pill TRUE">${esc(JSON.stringify(r))}</span>`));
+}
+async function runBackup(){
+  out("rec_out","<div class='card muted'>encrypting…</div>");
+  const r=await api("recovery",{action:"backup",partition:$("bk_partition").value,
+    asset:$("bk_asset").value,vault:$("bk_vault").value,
+    passphrase_file:$("bk_pass").value,product:$("bk_product").value,
+    serial_sha256:$("bk_serial").value,device_fingerprint:$("bk_fp").value});
+  if(r.error)return showError("rec_out",r.error);
+  out("rec_out",card("Vault backup <span class='pill TRUE'>created</span>",`<div class="kv">
+    <span class="k">vault</span><span>${esc(r.vault)}</span>
+    <span class="k">partition</span><span>${esc(r.partition)}</span>
+    <span class="k">sha256</span><span>${esc(r.sha256)}</span></div>
+    <p class="muted">${esc(r.refusal||"")}</p>`));
+}
+async function runDrill(){
+  out("rec_out","<div class='card muted'>drilling…</div>");
+  const r=await api("recovery",{action:"drill",partition:$("dr_partition").value,
+    asset:$("dr_asset").value,expected_sha256:$("dr_sha").value,vault:$("dr_vault").value,
+    product:$("dr_product").value,serial_sha256:$("dr_serial").value,
+    device_fingerprint:$("dr_fp").value,passphrase_file:$("dr_pass").value,
+    other_serial_sha256:$("dr_oserial").value,other_fingerprint:$("dr_ofp").value,
+    last_resort:$("dr_lr").value,simulate:$("dr_sim").value});
+  if(r.error)return showError("rec_out",r.error);
+  const rows=(r.steps||[]).map(s=>`<div class="step"><span class="name">${esc(s.name)}</span>
+    ${pill(s.state)}<span class="detail">${esc(s.detail)}</span></div>`).join("");
+  out("rec_out",card("M6 drill <span class='pill SIMULATED'>SIMULATED</span>",rows+
+    `<div class="verdict ${r.verdict}">${r.verdict}</div>
+     <p class="muted">same-device restored: ${r.same_device_restored} · cross-device refused: ${r.cross_device_refused}</p>`));
+}
+async function runExecute(){
+  out("ex_out","<div class='card muted'>executing in simulator…</div>");
+  const r=await api("execute",{state:$("ex_state").value,token:$("ex_token").value,
+    key:$("ex_key").value,simulate:$("ex_sim").value,nonce:$("ex_nonce").value||null,
+    device_fingerprint:$("ex_fp").value||null,journal:$("ex_journal").value||null,
+    timeout_s:+$("ex_timeout").value||600});
+  if(r.error)return showError("ex_out",r.error);
+  if(r.executed===false)return showError("chk_out","approval: "+JSON.stringify(r.approval));
+  const rows=(r.steps||r.writes||[]).map(s=>`<div class="step">
+    <span class="name">${esc(s.entry||s.step||s.name||"")}</span>
+    ${pill(s.state||s.verification||"SIMULATED")}
+    <span class="detail">${esc(s.detail||s.reason||"")}</span></div>`).join("");
+  out("ex_out",card("Execution <span class='pill SIMULATED'>SIMULATED</span>",
+    (rows||"<p class='muted'>completed</p>")+
+    `<div class="verdict ${r.verdict||""}">${esc(r.verdict||"")}</div>`+
+    (r.journal_path?`<p class="muted">journal: ${esc(r.journal_path)}</p>`:"")));
+}
+</script>
+</body>
+</html>
