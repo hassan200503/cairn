@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: tools/oracle/build_lpmake.sh "$HOME/.cache/cairn-aosp-oracle" "$RUNNER_TEMP/lpmake-build"
+      - run: bash tools/oracle/build_lpmake.sh "$HOME/.cache/cairn-aosp-oracle" "$RUNNER_TEMP/lpmake-build"
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
