@@ -609,3 +609,30 @@ C-accelerated), negligible next to a partition write, and offline guessing
 becomes 600,000× more expensive per guess. The construction still uses only
 stdlib primitives and is still pending external review (KU-032); the
 review bundle is `docs/REVIEW_BUNDLE.md`.
+
+## ADR-030 - Catalog signing is a detached HMAC-SHA256 over exact file bytes
+
+**Context.** KU-031 named catalog file signing as required work. The catalog is
+caller-supplied anchoring input (ADR-013): it decides which AVB key is expected
+and bounds rollback counters (SR-004), so an undetected edit to a catalog file
+would silently move a safety input. The standard library has no asymmetric
+signature primitive, and adding a dependency requires a decision record.
+
+**Decision.** `cairn catalog sign` writes a detached HMAC-SHA256 signature of the
+exact catalog file bytes next to it (`<catalog>.sig`, or `--signature`), using a
+key file of 32–4096 bytes. `cairn catalog verify` re-checks the schema and the
+signature. The anchoring paths (`avb key-check --catalog`, `rollback check
+--catalog`, `wizard --catalog`) accept `--catalog-key`/`--catalog-signature` and
+verify the signature against the exact bytes before any catalog content is used;
+a key without a signature, or the reverse, is a usage error rather than a silent
+unverified load. HMAC is used instead of a public-key scheme because a catalog is
+a locally managed operator file, not a distributed trust anchor — this matches
+the approval-token design (ADR-014, ADR-025), which made the same trade-off.
+
+**Consequences.** Any byte change — including whitespace or re-serialized JSON —
+invalidates the signature, so the signed artifact is the file as distributed.
+HMAC does not protect against a malicious operator who holds the key; it protects
+the anchoring inputs against tampering in storage and transit. If catalogs are
+ever distributed as a signed public asset, the format gains an asymmetric
+signature alongside this one and KU-031 is updated; the v2 schema version is not
+reused.

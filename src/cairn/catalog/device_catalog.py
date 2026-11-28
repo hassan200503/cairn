@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping
@@ -333,5 +334,62 @@ def load_catalog(path: Path) -> DeviceCatalog:
     except (OSError, UnicodeDecodeError) as exc:
         raise CatalogError(f"cannot read catalog {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
+        raise CatalogError(f"catalog {path} is not valid JSON: {exc}") from exc
+    return parse_catalog(document)
+
+
+MIN_HMAC_KEY_BYTES: Final = 32
+MAX_HMAC_KEY_BYTES: Final = 4096
+
+
+def sign_catalog_bytes(data: bytes, key: bytes) -> str:
+    """Return the detached HMAC-SHA256 signature of exact catalog file bytes."""
+    if not MIN_HMAC_KEY_BYTES <= len(key) <= MAX_HMAC_KEY_BYTES:
+        raise CatalogError(f"catalog key must be {MIN_HMAC_KEY_BYTES}..{MAX_HMAC_KEY_BYTES} bytes")
+    return hmac.new(key, data, hashlib.sha256).hexdigest()
+
+
+def load_catalog_verified(
+    path: Path,
+    *,
+    hmac_key: bytes | None = None,
+    signature: str | None = None,
+) -> DeviceCatalog:
+    """Load a catalog, optionally verifying a detached HMAC-SHA256 signature.
+
+    The signature covers the exact file bytes, so any edit — including one
+    that keeps the JSON valid — invalidates it. A key without a signature,
+    a signature without a key, or a key outside the size bounds is refused;
+    an unverified load stays available because an unsigned catalog is a
+    known limitation (KU-031), not a hidden one.
+    """
+    if hmac_key is not None or signature is not None:
+        if hmac_key is None or signature is None:
+            raise CatalogError(
+                "verifying a catalog signature requires both the key and the signature"
+            )
+        if not MIN_HMAC_KEY_BYTES <= len(hmac_key) <= MAX_HMAC_KEY_BYTES:
+            raise CatalogError(
+                f"catalog key must be {MIN_HMAC_KEY_BYTES}..{MAX_HMAC_KEY_BYTES} bytes"
+            )
+    if hmac_key is None:
+        return load_catalog(path)
+    try:
+        data = path.read_bytes()
+        if len(data) > MAX_CATALOG_BYTES:
+            raise CatalogError(
+                f"catalog is {len(data)} bytes, above the {MAX_CATALOG_BYTES}-byte limit"
+            )
+    except CatalogError:
+        raise
+    except OSError as exc:
+        raise CatalogError(f"cannot read catalog {path}: {exc}") from exc
+    expected = hmac.new(hmac_key, data, hashlib.sha256).hexdigest()
+    # The guard above refused a key without a signature, so it is present here.
+    if not hmac.compare_digest(expected, (signature or "").strip().lower()):
+        raise CatalogError(f"catalog {path} signature does not match its bytes")
+    try:
+        document: object = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CatalogError(f"catalog {path} is not valid JSON: {exc}") from exc
     return parse_catalog(document)
