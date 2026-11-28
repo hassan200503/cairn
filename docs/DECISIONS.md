@@ -29,6 +29,10 @@ Decisions are append-only. To change one, add a new ADR that supersedes it.
 | ADR-023 | A caller-provided lock state is contextual input, not device-trust evidence | Accepted | 2026-11-26 |
 | ADR-024 | Plan structure and safety authorization are separate gates | Accepted | 2026-11-26 |
 | ADR-025 | Approval binding is a consistency gate, enforced as SR-018 before any write | Accepted | 2026-11-27 |
+| ADR-026 | Wizard sessions are strict, reloadable consistency records | Accepted | 2026-11-27 |
+| ADR-027 | The executor is simulator-gated and journal-first; real fastboot binaries are refused | Accepted | 2026-11-27 |
+| ADR-028 | The recovery vault is encrypted, device-bound, and restore-only-same-device | Accepted | 2026-11-27 |
+| ADR-029 | Vault format v2: PBKDF2-HMAC-SHA256 KDF stretch, 600,000 iterations, pinned by the format | Accepted | 2026-11-27 |
 
 ---
 
@@ -581,3 +585,27 @@ tamper/MAC/wrong-passphrase paths. What this does NOT buy: no KDF stretching yet
 hardware drill, and no real-device write path — the M6 gate still requires the
 external reviews, real transcripts, and the Virtual A/B state machines before a
 real transport can be constructed.
+
+## ADR-029 - Vault format v2: a stretching KDF, pinned by the format
+
+**Context.** ADR-028's vault derived its keys with a single-pass HKDF-style
+extract — one HMAC over the passphrase. That makes offline guessing of a weak
+passphrase cheap, and KU-032 named it as a required format-version change before
+any external review sign-off.
+
+**Decision.** `VAULT_SCHEMA_VERSION` moves to 2. Key derivation is now
+PBKDF2-HMAC-SHA256 with 600,000 iterations (OWASP 2023 guidance for this
+primitive), followed by the same two HMAC domain-separation steps as before.
+The KDF name and iteration count are stored in a `kdf` block inside the MACed
+document and are pinned: the loader verifies the MAC using the document's
+declared (bounded, 10,000–10,000,000) iteration count, so any edit to the block
+breaks the MAC, and after the MAC verifies only the pinned values are accepted.
+A v1 file is refused with a pointer to this ADR — there is no silent migration,
+because no vault written by pre-review code deserves a data path into the new
+format.
+
+**Consequences.** One derivation costs ~0.15 s (`hashlib.pbkdf2_hmac` is
+C-accelerated), negligible next to a partition write, and offline guessing
+becomes 600,000× more expensive per guess. The construction still uses only
+stdlib primitives and is still pending external review (KU-032); the
+review bundle is `docs/REVIEW_BUNDLE.md`.

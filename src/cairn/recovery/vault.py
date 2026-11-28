@@ -8,10 +8,15 @@ overridable. Cross-device restore is refused unconditionally — this preserves 
 IMEI/data-transplant non-goals.
 
 Crypto, v0 (ADR-028): the vault uses only Python-stdlib primitives. A per-vault
-random salt and a passphrase are expanded with an HMAC-SHA256 HKDF-style
-extract-and-expand into two domain-separated keys (encryption, MAC); payload bytes
-are encrypted with an HMAC-SHA256-CTR keystream and authenticated encrypt-then-MAC
-over the canonical header plus ciphertexts. This construction is deliberately
+random salt and a passphrase are expanded into two domain-separated keys
+(encryption, MAC); payload bytes are encrypted with an HMAC-SHA256-CTR keystream
+and authenticated encrypt-then-MAC over the canonical header plus ciphertexts.
+
+Crypto, v1 (ADR-029): key derivation gained a stretching KDF — PBKDF2-HMAC-SHA256
+with 600,000 iterations (OWASP 2023 recommendation for this primitive), replacing
+the single-pass HKDF-style extract. The iteration count and KDF name are pinned
+in the file format and covered by the MAC; changing either is a new schema
+version, never an in-place tweak. This construction is deliberately
 conservative and its external cryptographic review is still pending (KU-032); the
 vault is a confidentiality-and-integrity container against casual access and
 tampering, not a defence against a compromised host (same boundary as ADR-014).
@@ -35,7 +40,7 @@ from typing import Final
 from cairn.core.errors import RecoveryError
 
 VAULT_KIND: Final = "cairn.vault"
-VAULT_SCHEMA_VERSION: Final = 1
+VAULT_SCHEMA_VERSION: Final = 2
 MAX_VAULT_BYTES: Final = 512 * 1024 * 1024
 MAX_ENTRY_NAME_CHARS: Final = 128
 _SALT_BYTES: Final = 16
@@ -43,6 +48,12 @@ _NONCE_BYTES: Final = 16
 _MAC_BYTES: Final = 32
 _PARTITION_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _HEX64_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+# ADR-029: PBKDF2-HMAC-SHA256, 600,000 iterations (OWASP 2023 guidance for this
+# primitive). Both are pinned by the format; changing either is a new schema
+# version. The count keeps one derivation at a fraction of a second, which is
+# negligible next to a partition write and makes offline guessing expensive.
+KDF_NAME: Final = "pbkdf2-hmac-sha256"
+KDF_ITERATIONS: Final = 600_000
 
 _ENTRY_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -172,6 +183,7 @@ class Vault:
             "created_at": self.created_at.astimezone(UTC).isoformat(),
             "device": self.device.to_dict(),
             "salt_b64": base64.b64encode(self.salt).decode("ascii"),
+            "kdf": {"name": KDF_NAME, "iterations": KDF_ITERATIONS},
             "entries": [
                 {
                     "partition": entry.partition,
@@ -192,13 +204,19 @@ class Vault:
         return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
 
 
-def _derive_keys(passphrase: str, salt: bytes) -> tuple[bytes, bytes]:
-    """HMAC-SHA256 HKDF-style extract-and-expand; domain-separated per use."""
+def _derive_keys(
+    passphrase: str, salt: bytes, iterations: int = KDF_ITERATIONS
+) -> tuple[bytes, bytes]:
+    """PBKDF2-HMAC-SHA256 stretch, then domain-separated key separation (ADR-029).
+
+    The stretch makes offline guessing of a weak passphrase expensive; the two
+    HMAC steps keep encryption and MAC independent.
+    """
     if not passphrase:
         raise VaultError("vault passphrase must not be empty")
-    prk = hmac.new(salt, passphrase.encode("utf-8"), hashlib.sha256).digest()
-    encryption_key = hmac.new(prk, b"cairn-vault-encrypt\x01", hashlib.sha256).digest()
-    mac_key = hmac.new(prk, b"cairn-vault-mac\x01", hashlib.sha256).digest()
+    master = hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, iterations)
+    encryption_key = hmac.new(master, b"cairn-vault-encrypt\x01", hashlib.sha256).digest()
+    mac_key = hmac.new(master, b"cairn-vault-mac\x01", hashlib.sha256).digest()
     return encryption_key, mac_key
 
 
@@ -220,9 +238,11 @@ def _xor(bytes_a: bytes, bytes_b: bytes) -> bytes:
     return bytes(a ^ b for a, b in zip(bytes_a, bytes_b, strict=True))
 
 
-def _document_mac(document: dict[str, object], passphrase: str) -> bytes:
+def _document_mac(
+    document: dict[str, object], passphrase: str, *, iterations: int = KDF_ITERATIONS
+) -> bytes:
     salt = base64.b64decode(document["salt_b64"], validate=True)  # type: ignore[arg-type]
-    _, mac_key = _derive_keys(passphrase, salt)
+    _, mac_key = _derive_keys(passphrase, salt, iterations)
     canonical = json.dumps(
         document,
         sort_keys=True,
@@ -290,16 +310,37 @@ def load_vault(path: Path, *, passphrase: str) -> Vault:
 def _parse_vault(document: object, *, passphrase: str) -> Vault:
     if not isinstance(document, dict):
         raise VaultError("vault must be a JSON object")
-    if document.get("kind") != VAULT_KIND or document.get("schema_version") != VAULT_SCHEMA_VERSION:
+    version = document.get("schema_version")
+    if version == 1:
+        raise VaultError(
+            "vault schema_version 1 predates the KDF-stretching format (ADR-029) "
+            "and is not supported; re-create the backup with this version"
+        )
+    if document.get("kind") != VAULT_KIND or version != VAULT_SCHEMA_VERSION:
         raise VaultError("vault kind or schema_version is not supported")
     if document.get("mac_b64") is None:
         raise VaultError("vault is missing its MAC")
     if document.get("salt_b64") is None:
         raise VaultError("vault is missing its salt")
+    # The KDF parameters are part of the MACed document. The MAC is verified
+    # using the document's declared iteration count (bounded), so an edit to
+    # the kdf block breaks the MAC; only after the MAC verifies is the pinned
+    # stretch enforced.
+    kdf_raw = document.get("kdf")
+    if not isinstance(kdf_raw, dict):
+        raise VaultError("vault is missing its kdf parameters")
+    kdf_name = kdf_raw.get("name")
+    kdf_iterations = kdf_raw.get("iterations")
+    if not isinstance(kdf_name, str) or not isinstance(kdf_iterations, int):
+        raise VaultError("vault kdf parameters are malformed")
+    if isinstance(kdf_iterations, bool) or not 10_000 <= kdf_iterations <= 10_000_000:
+        raise VaultError("vault kdf iteration count is outside the accepted bounds")
+    iterations = kdf_iterations
 
     expected_mac = _document_mac(
         {key: value for key, value in document.items() if key != "mac_b64"},
         passphrase,
+        iterations=iterations,
     )
     try:
         stored_mac = base64.b64decode(document["mac_b64"], validate=True)
@@ -309,6 +350,8 @@ def _parse_vault(document: object, *, passphrase: str) -> Vault:
         raise VaultTamperedError(
             "vault MAC does not verify; the file was edited, corrupted, or the passphrase is wrong"
         )
+    if kdf_name != KDF_NAME or kdf_iterations != KDF_ITERATIONS:
+        raise VaultError(f"vault kdf must be {KDF_NAME} at {KDF_ITERATIONS} iterations (ADR-029)")
 
     try:
         salt = base64.b64decode(document["salt_b64"], validate=True)

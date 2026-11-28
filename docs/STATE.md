@@ -10,11 +10,10 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the T26 slice: the executor gained a
-journal growth policy (rotation to verified continuation chains at resume
-time) and a pre-write VAB/slot reconciliation (SR-010 re-checked in the
-executor, journaled as `reconciled`, mid-merge aborts before the first
-write). Probe capture (`cairn probe --capture`) and the vault and drill are
+**Last updated:** 2026-11-27, after the T25 slice: the recovery vault moved to
+format v2 (ADR-029) — PBKDF2-HMAC-SHA256 at 600,000 iterations, pinned inside
+the MACed document, v1 refused — and `docs/REVIEW_BUNDLE.md` now packages
+everything the KU-032 external reviews need. The vault and drill remain
 simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
@@ -356,15 +355,15 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 609 passed, 6 skipped
+uv run pytest -q               # 611 passed, 6 skipped
 ```
 
 The latest CI run is `46090782794` for the T21/T24 super-oracle slice merged
 through pull request [#10](https://github.com/hassan200503/cairn/pull/10)
 (merge `dc0ed9f`) and is green, including the lpmake differential job (10
 passed, 0 skipped). The T22/T23 capture slice postdates that run; its CI run
-must be green before merge. The 609-test baseline above was confirmed locally
-on the T26 slice.
+must be green before merge. The 611-test baseline above was confirmed locally
+on the T25 slice.
 
 The six local skips are environmental, not gaps in coverage:
 
@@ -427,10 +426,11 @@ These are the reasons the remaining work cannot simply be "finished":
   safety rules, but it has only package provenance evidence; absent identity, AVB,
   rollback, tool, and lock/key facts remain UNKNOWN and it is therefore
   non-executable (KU-031).
-- **No external review of the recovery vault.** The vault crypto and the M6
-  drill have only this project's own review and tests; external sign-off is an
-  explicit T15 acceptance condition (KU-032), and no real-device write may
-  depend on the vault until it lands.
+- **No external review of the recovery vault.** The vault crypto (format v2,
+  ADR-029) and the M6 drill have only this project's own review and tests;
+  external sign-off is an explicit T15 acceptance condition (KU-032), and no
+  real-device write may depend on the vault until it lands. The review package
+  is `docs/REVIEW_BUNDLE.md`.
 - **No real-device super image fixtures.** The official AOSP `lpmake` is now
   built from pinned source in CI (`tools/oracle/`), and the super-metadata
   parser is differentially tested against it (T21/T24, closing the KU-033
@@ -489,7 +489,10 @@ push, confirm CI green.
    model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
    readiness checks, the encrypted device-bound vault with
    restore-only-same-device enforcement, and the `cairn recovery
-   backup|verify|restore|drill` CLI are in `cairn.recovery` (ADR-028). The drill
+   backup|verify|restore|drill` CLI are in `cairn.recovery` (ADR-028). The
+   T25 slice moved the vault to format v2 (ADR-029: PBKDF2-HMAC-SHA256 at
+   600,000 iterations, pinned inside the MACed document, v1 files refused)
+   and prepared `docs/REVIEW_BUNDLE.md` for the KU-032 reviewers. The drill
    proves the same-device round trip and the cross-device refusal in the
    simulator. Remaining work before the M6 gate opens a real-device transport:
    external crypto review of the vault and external safety review of the drill

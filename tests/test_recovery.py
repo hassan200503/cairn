@@ -323,3 +323,34 @@ def test_drill_reports_a_failed_restore_write(tmp_path: Path) -> None:
     assert report.verdict is Tri.FALSE
     assert not report.same_device_restored
     assert report.cross_device_refused
+
+
+def test_vault_format_is_v2_with_pinned_kdf(tmp_path: Path) -> None:
+    from cairn.recovery.vault import KDF_ITERATIONS, KDF_NAME, VAULT_SCHEMA_VERSION
+
+    vault = create_vault(
+        device=_device(), entries={"persist": _PARTITION_BYTES}, passphrase=_PASSPHRASE, now=NOW
+    )
+    path = tmp_path / "vault.json"
+    save_vault(path, vault, passphrase=_PASSPHRASE)
+    document = json.loads(path.read_text(encoding="utf-8"))
+
+    assert document["schema_version"] == VAULT_SCHEMA_VERSION == 2
+    assert document["kdf"] == {"name": KDF_NAME, "iterations": KDF_ITERATIONS}
+    # the kdf block is inside the MACed document: editing it is a tamper
+    document["kdf"]["iterations"] = 700_000  # in bounds, so the MAC is what catches it
+    path.write_text(json.dumps(document), encoding="utf-8")
+    with pytest.raises(VaultTamperedError):
+        load_vault(path, passphrase=_PASSPHRASE)
+
+
+def test_vault_refuses_a_v1_file(tmp_path: Path) -> None:
+    from cairn.recovery.vault import load_vault as _load
+
+    path = tmp_path / "v1.json"
+    path.write_text(
+        json.dumps({"kind": "cairn.vault", "schema_version": 1, "mac_b64": "x", "salt_b64": "x"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(VaultError, match="ADR-029"):
+        _load(path, passphrase="whatever")
