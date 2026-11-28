@@ -10,12 +10,12 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the T22/T23 slice: the real-transport
-review was folded into a conclusion (the missing M6 input is evidence, not
-transport code) and `cairn probe --capture` landed — a one-command read-only
-probe capture that journals every invocation, scrubs serials, and drafts a
-`HARDWARE_FINDINGS.md` finding. The vault and
-drill are simulator-only and externally unreviewed (KU-032).
+**Last updated:** 2026-11-27, after the T26 slice: the executor gained a
+journal growth policy (rotation to verified continuation chains at resume
+time) and a pre-write VAB/slot reconciliation (SR-010 re-checked in the
+executor, journaled as `reconciled`, mid-merge aborts before the first
+write). Probe capture (`cairn probe --capture`) and the vault and drill are
+simulator-only and externally unreviewed (KU-032).
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -356,15 +356,15 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 602 passed, 6 skipped
+uv run pytest -q               # 609 passed, 6 skipped
 ```
 
 The latest CI run is `46090782794` for the T21/T24 super-oracle slice merged
 through pull request [#10](https://github.com/hassan200503/cairn/pull/10)
 (merge `dc0ed9f`) and is green, including the lpmake differential job (10
 passed, 0 skipped). The T22/T23 capture slice postdates that run; its CI run
-must be green before merge. The 602-test baseline above was confirmed locally
-on the T23 slice.
+must be green before merge. The 609-test baseline above was confirmed locally
+on the T26 slice.
 
 The six local skips are environmental, not gaps in coverage:
 
@@ -475,9 +475,16 @@ push, confirm CI green.
    write-ahead journal, idempotency classes, reconcile-on-resume, and the
    crash-at-every-journal-point harness are in `cairn.executor`, wired to the CLI as
    `cairn execute` (ADR-027). Every write verb reaches the transcript simulator
-   only; a real fastboot binary is refused. Remaining work: the real-device
-   transport (blocked behind T15 and the M6 gate), slot/Virtual A/B state
-   reconciliation, and a journal growth policy for very long plans.
+   only; a real fastboot binary is refused. The T26 slice added the journal
+   growth policy (a journal nearing its 32 MiB limit is rotated at resume time
+   to a verified continuation chain — `.r1`, `.r2`, … files whose session
+   records chain to the predecessor's head hash; predecessors are kept as
+   evidence) and pre-write slot/VAB reconciliation: before the first write the
+   executor reads `snapshot-update-status` and `current-slot` through the
+   transport's read-only seam, journals a `reconciled` record, and aborts on a
+   mid-merge state (SR-010 FALSE; UNKNOWN is journaled as a warning in the
+   simulator-only executor). Remaining work: the real-device transport (blocked
+   behind T15 and the M6 gate).
 6. **T15 — Recovery Kit and the M6 gate (landed, simulator-only).** The threat
    model (`docs/RECOVERY_THREAT_MODEL.md`), the SR-008 asset-verification and
    readiness checks, the encrypted device-bound vault with

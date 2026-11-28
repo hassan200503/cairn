@@ -189,6 +189,13 @@ operator-approved merge/cancel flow with recovery readiness.
 override.
 **UNKNOWN:** state cannot be read, or the device reports an unrecognized value.
 Block; no override.
+**Enforcement:** the safety engine (rule SR-010) and, since the executor's
+pre-write reconciliation, the executor itself: before the first write verb it
+reads `snapshot-update-status` and `current-slot` through the transport's
+read-only seam, journals a `reconciled` record, and aborts on any FALSE
+mid-merge state. In the simulator-only executor an UNKNOWN reconciliation
+value is journaled as a warning and does not block, consistent with the
+SafetyGate semantics (a real-device transport must re-evaluate this).
 **Source:** [AOSP-FASTBOOTD], [AOSP-FASTBOOT-SRC]. Observed values: `snapshotted`,
 `merging`, `none`; a FAIL (including `not supported`) is `UNKNOWN`. Cairn never
 auto-cancels; AOSP documents cancel as potentially unbootable until reflashed.

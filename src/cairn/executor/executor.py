@@ -35,7 +35,13 @@ from cairn.adapters.prepare import PreparedFastboot
 from cairn.approval.token import ApprovalVerdict
 from cairn.core.errors import CairnError, ToolError
 from cairn.core.tristate import Tri
-from cairn.executor.journal import Journal, JournalCorruptError, JournalKind, JournalRecord
+from cairn.executor.journal import (
+    ROTATE_THRESHOLD_BYTES,
+    Journal,
+    JournalCorruptError,
+    JournalKind,
+    JournalRecord,
+)
 from cairn.plan.planner import Plan, PlanAction, PlanStep, verify_plan_hash
 from cairn.tools.runner import ToolResult, ToolRunner
 
@@ -78,6 +84,17 @@ class WriteTransport(Protocol):
         image_path: Path | None,
         timeout_s: float,
     ) -> ToolResult: ...
+
+
+class ReadTransport(Protocol):
+    """Optional read-only seam used for pre-write state reconciliation.
+
+    The executor only ever issues ``getvar`` through this; a transport without
+    ``read_var`` simply skips reconciliation, which is then recorded as
+    UNKNOWN in the journal.
+    """
+
+    def read_var(self, name: str, *, timeout_s: float) -> ToolResult: ...
 
 
 def idempotency_of(step: PlanStep) -> Idempotency:
@@ -126,6 +143,7 @@ class ExecuteResult:
     steps: tuple[StepOutcome, ...]
     aborted_step: int | None = None
     crash_consistent: bool = True
+    journal_path: Path | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -134,6 +152,7 @@ class ExecuteResult:
             "completed": self.completed,
             "reason": self.reason,
             "aborted_step": self.aborted_step,
+            "journal_path": str(self.journal_path) if self.journal_path is not None else None,
             "steps": [step.to_dict() for step in self.steps],
         }
 
@@ -174,11 +193,23 @@ def staged_image_path(staging_dir: Path, image: str) -> Path:
     return staging_dir / image.replace("/", "_")
 
 
+def _resolve_tip(path: Path) -> Path:
+    """Follow rotation successors (.r1, .r2, ...) to the journal's live tip."""
+    tip = path
+    for index in range(1, 1000):
+        successor = path.with_name(f"{path.stem}.r{index}{path.suffix}")
+        if not successor.exists():
+            return tip
+        tip = successor
+    return tip
+
+
 def _open_journal(
     path: Path,
     request: ExecutionRequest,
     crash_hook: CrashHook | None,
 ) -> Journal:
+    path = _resolve_tip(path)
     session_payload: dict[str, object] = {
         "journal_kind": "cairn.executor-journal",
         "schema_version": 1,
@@ -197,7 +228,7 @@ def _open_journal(
             except OSError as exc:
                 raise ExecutorRefused(f"cannot reset an empty journal {path}: {exc}") from exc
         else:
-            journal = Journal.resume(path)
+            journal = Journal.resume_chain(path)
             last_session = journal.records[0]
             if last_session.kind is not JournalKind.SESSION:
                 raise ExecutorRefused(f"journal {path} does not start with a session record")
@@ -210,10 +241,94 @@ def _open_journal(
                 raise ExecutorRefused(
                     "journal was recorded for a different package; start a new execution"
                 )
-            return journal
+            return _maybe_rotate(journal)
     journal = Journal.create(path, session_payload)
     _crash_point(crash_hook, journal.last)
     return journal
+
+
+def _maybe_rotate(journal: Journal) -> Journal:
+    """Growth policy: rotate a journal nearing its byte limit at resume time.
+
+    The successor file continues the chain (``Journal.rotate``); appends land
+    in the successor and the predecessor stays on disk as evidence.
+    """
+    if journal.size_bytes() < ROTATE_THRESHOLD_BYTES:
+        return journal
+    stem = journal.path.stem
+    for index in range(1, 1000):
+        successor = journal.path.with_name(f"{stem}.r{index}{journal.path.suffix}")
+        if not successor.exists():
+            return journal.rotate(successor)
+    raise ExecutorRefused(
+        f"journal {journal.path} needs rotation but every successor name .r1-.r999 exists"
+    )
+
+
+def _getvar_value(result: ToolResult, name: str) -> str | None:
+    """Extract a value from fastboot getvar output ('(bootloader) name: value')."""
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("(") and ") " in stripped:
+            stripped = stripped.split(") ", 1)[1].strip()
+        prefix = f"{name}:"
+        if stripped.startswith(prefix) or stripped.startswith(f"{name} :"):
+            value = (
+                stripped[len(prefix) :].strip()
+                if stripped.startswith(prefix)
+                else stripped.split(":", 1)[1].strip()
+            )
+            if value:
+                return value
+    return None
+
+
+def _reconcile_vab(transport: object, journal: Journal, timeout_s: float) -> ExecuteResult | None:
+    """Read-only pre-write reconciliation of slot and merge state (SR-010).
+
+    Runs only when the transport exposes ``read_var``. A mid-merge
+    ``snapshot-update-status`` is a never-overridable FALSE and aborts before
+    the first write; an unreadable or unrecognized value is UNKNOWN, which in
+    the simulator-only executor is journaled as a warning and does not block
+    (consistent with the SafetyGate semantics).
+    """
+    read_var = getattr(transport, "read_var", None)
+    payload: dict[str, object] = {"checks": {}}
+    checks: dict[str, object] = {}
+    if read_var is None:
+        checks["transport"] = "transport exposes no read seam; reconciliation skipped (UNKNOWN)"
+        payload["checks"] = checks
+        journal.append(JournalKind.RECONCILED, payload)
+        return None
+    if not callable(read_var):
+        raise ExecutorRefused("transport read seam is not callable")
+    # Imported here: cairn.vab.flows imports this module, so a module-level
+    # import of the cairn.vab package would be a circular import.
+    from cairn.vab.merge_state import classify_snapshot_status
+
+    slot_result = read_var("current-slot", timeout_s=timeout_s)
+    merge_result = read_var("snapshot-update-status", timeout_s=timeout_s)
+    slot_value = _getvar_value(slot_result, "current-slot") if slot_result.ok else None
+    merge_value = _getvar_value(merge_result, "snapshot-update-status") if merge_result.ok else None
+    merge_read = classify_snapshot_status(merge_value, simulated=True)
+    checks["current-slot"] = {"ok": slot_result.ok, "value": slot_value}
+    checks["snapshot-update-status"] = merge_read.to_dict()
+    payload["checks"] = checks
+    journal.append(JournalKind.RECONCILED, payload)
+
+    if merge_read.state is Tri.FALSE:
+        journal.append(
+            JournalKind.ABORTED,
+            {"reason": f"SR-010 mid-merge state: {merge_read.detail}"},
+        )
+        return ExecuteResult(
+            verdict=Tri.FALSE,
+            simulated=True,
+            completed=False,
+            reason=f"refused before the first write: {merge_read.detail}",
+            steps=(),
+        )
+    return None
 
 
 def _check_gates(request: ExecutionRequest) -> None:
@@ -351,6 +466,19 @@ def execute_plan(
     step_states = _step_journal_state(journal)
     outcomes: list[StepOutcome] = []
 
+    refused = _reconcile_vab(request.transport, journal, timeout_s=request.timeout_s)
+    _crash_point(crash_hook, journal.last)
+    if refused is not None:
+        return ExecuteResult(
+            verdict=refused.verdict,
+            simulated=True,
+            completed=False,
+            reason=refused.reason,
+            steps=refused.steps,
+            aborted_step=refused.aborted_step,
+            journal_path=journal.path,
+        )
+
     for step in request.plan.steps:
         state = step_states.get(step.number)
         if state == "done":
@@ -387,6 +515,7 @@ def execute_plan(
                     f"{request.plan.fallback.action}: {request.plan.fallback.detail}"
                 ),
                 steps=tuple(outcomes),
+                journal_path=journal.path,
                 aborted_step=step.number,
             )
         if state == "started" and idempotency_of(step) is Idempotency.NON_IDEMPOTENT:
@@ -408,6 +537,7 @@ def execute_plan(
                     f"{request.plan.fallback.detail} and a fresh preflight"
                 ),
                 steps=tuple(outcomes),
+                journal_path=journal.path,
                 aborted_step=step.number,
             )
 
@@ -437,6 +567,7 @@ def execute_plan(
                     f"the fallback is {request.plan.fallback.action}"
                 ),
                 steps=tuple(outcomes),
+                journal_path=journal.path,
                 aborted_step=step.number,
             )
 
@@ -463,6 +594,7 @@ def execute_plan(
                     f"{request.plan.fallback.detail}"
                 ),
                 steps=tuple(outcomes),
+                journal_path=journal.path,
                 aborted_step=step.number,
             )
 
@@ -494,6 +626,7 @@ def execute_plan(
         reason="every plan step completed in the simulator; this run is SIMULATED, "
         "not device evidence",
         steps=tuple(outcomes),
+        journal_path=journal.path,
     )
 
 
@@ -550,4 +683,12 @@ class SimulatedFastbootTransport:
         timeout_s: float,
     ) -> ToolResult:
         argv = (*self._prefix, *_build_step_argv(step, image_path))
+        return self._runner.run(argv, timeout_s=timeout_s, extra_env=self._extra_env)
+
+    def read_var(self, name: str, *, timeout_s: float) -> ToolResult:
+        # Read-only getvar through the same simulated prefix; the executor uses
+        # this for pre-write merge-state and slot reconciliation (SR-010).
+        if any(ch in name for ch in (" ", ";", "&", "|", "$", "`", "\n")):
+            raise ExecutorRefused(f"invalid getvar name {name!r}")
+        argv = (*self._prefix, "getvar", name)
         return self._runner.run(argv, timeout_s=timeout_s, extra_env=self._extra_env)

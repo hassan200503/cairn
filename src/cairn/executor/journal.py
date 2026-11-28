@@ -32,6 +32,11 @@ JOURNAL_SCHEMA_VERSION: Final = 1
 MAX_JOURNAL_BYTES: Final = 32 * 1024 * 1024
 MAX_RECORD_BYTES: Final = 64 * 1024
 GENESIS_SHA256: Final = "0" * 64
+# Growth policy: a journal that reaches this share of the byte limit is rotated
+# to a continuation file at resume time instead of growing without bound. The
+# predecessor file is never deleted — it is crash evidence.
+ROTATE_THRESHOLD_BYTES: Final = 24 * 1024 * 1024
+MAX_CHAIN_DEPTH: Final = 8
 
 _HEX64_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 
@@ -56,6 +61,7 @@ class JournalKind(StrEnum):
     STEP_SKIPPED = "step_skipped"
     ABORTED = "aborted"
     COMPLETED = "completed"
+    RECONCILED = "reconciled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +267,19 @@ class Journal:
         if len(line) > MAX_RECORD_BYTES:
             raise JournalWriteError("journal record is above the byte limit")
         try:
+            current_size = self._path.stat().st_size
+        except FileNotFoundError:
+            # An in-memory journal whose file was not created yet; the append
+            # below creates it.
+            current_size = 0
+        except OSError as exc:
+            raise JournalWriteError(f"cannot stat journal {self._path}: {exc}") from exc
+        if current_size + len(line) > MAX_JOURNAL_BYTES:
+            raise JournalWriteError(
+                f"journal {self._path} is at its {MAX_JOURNAL_BYTES}-byte limit; "
+                "resume the execution to rotate it to a continuation journal"
+            )
+        try:
             with open(self._path, "ab") as handle:
                 handle.write(line)
                 handle.flush()
@@ -269,6 +288,96 @@ class Journal:
             raise JournalWriteError(f"cannot append to journal {self._path}: {exc}") from exc
         self._records.append(record)
         return record
+
+    def size_bytes(self) -> int:
+        try:
+            return self._path.stat().st_size
+        except OSError as exc:
+            raise JournalError(f"cannot stat journal {self._path}: {exc}") from exc
+
+    def rotate(self, successor_path: Path) -> Journal:
+        """Continue this journal in a new file, chaining back to this one.
+
+        The successor's session record names this journal's path and head hash;
+        ``load_chain`` verifies that link on resume. The predecessor file is kept
+        as evidence and is never deleted or rewritten.
+        """
+        last = self.last
+        if last is None:
+            raise JournalWriteError("cannot rotate an empty journal")
+        continuation: dict[str, object] = {
+            "journal_kind": JOURNAL_KIND,
+            "schema_version": JOURNAL_SCHEMA_VERSION,
+            "continues_from": {
+                "path": str(self._path),
+                "head_sha256": last.record_sha256,
+                "records": len(self._records),
+            },
+            "reason": "journal growth policy rotation",
+        }
+        successor = Journal.create(successor_path, continuation)
+        # The in-memory journal keeps the full chain so step-state reconciliation
+        # and subsequent appends see the predecessor records too.
+        return Journal(successor_path, (*self._records, *successor.records))
+
+    @classmethod
+    def load_chain(cls, path: Path, *, max_bytes: int = MAX_JOURNAL_BYTES) -> JournalLoad:
+        """Load a journal and, if it continues an earlier one, its predecessors.
+
+        The continuation link is verified against the predecessor's actual head
+        hash; a missing, unreadable, or mismatched predecessor is corruption, not
+        a soft warning, because the step states live in the chain.
+        """
+        return cls._load_chain(path, max_bytes=max_bytes, depth=0)
+
+    @classmethod
+    def _load_chain(cls, path: Path, *, max_bytes: int, depth: int) -> JournalLoad:
+        if depth > MAX_CHAIN_DEPTH:
+            raise JournalCorruptError(
+                f"journal continuation chain starting at {path} is deeper than {MAX_CHAIN_DEPTH}"
+            )
+        tip = cls.load(path, max_bytes=max_bytes)
+        if not tip.records or tip.records[0].kind is not JournalKind.SESSION:
+            return tip
+        continues = tip.records[0].payload.get("continues_from")
+        if not isinstance(continues, dict):
+            return tip
+        predecessor_path_raw = continues.get("path")
+        head = continues.get("head_sha256")
+        if not isinstance(predecessor_path_raw, str) or not isinstance(head, str):
+            raise JournalCorruptError(
+                f"journal {path} has a continuation record without path/head_sha256"
+            )
+        if not _HEX64_RE.fullmatch(head):
+            raise JournalCorruptError(f"journal {path} continuation head hash is not hex64")
+        predecessor = cls._load_chain(
+            Path(predecessor_path_raw), max_bytes=max_bytes, depth=depth + 1
+        )
+        if predecessor.last is None:
+            raise JournalCorruptError(
+                f"journal {path} continues from {predecessor_path_raw}, which has no records"
+            )
+        if predecessor.last.record_sha256 != head:
+            raise JournalCorruptError(
+                f"journal {path} continues from head {head[:12]}…, but "
+                f"{predecessor_path_raw} ends at {predecessor.last.record_sha256[:12]}…"
+            )
+        return JournalLoad(
+            records=predecessor.records + tip.records,
+            torn_tail=tip.torn_tail,
+            valid_bytes=tip.valid_bytes,
+        )
+
+    @classmethod
+    def resume_chain(cls, path: Path, *, max_bytes: int = MAX_JOURNAL_BYTES) -> Journal:
+        """Resume a possibly-continued journal; appends land in the tip file."""
+        loaded = cls._load_chain(path, max_bytes=max_bytes, depth=0)
+        if loaded.torn_tail:
+            with open(path, "r+b") as handle:
+                handle.truncate(loaded.valid_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+        return cls(path, loaded.records)
 
 
 def _decode_record(line: bytes, path: Path, index: int) -> JournalRecord:
