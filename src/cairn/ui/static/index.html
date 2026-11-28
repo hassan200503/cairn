@@ -261,6 +261,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
     <div class="grid">
       <div><label>nonce (if session has no probed binding)</label><input id="ex_nonce"></div>
       <div><label>device fingerprint (same)</label><input id="ex_fp"></div>
+      <div><label>staging dir (must match the transcript's staged paths)</label><input id="ex_staging" placeholder="staging"></div>
       <div><label>journal path (optional)</label><input id="ex_journal"></div>
       <div><label>timeout seconds</label><input id="ex_timeout" type="number" value="600"></div>
     </div>
@@ -274,12 +275,21 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:18px}
 <footer>Cairn — mark the path, verify the state. UNKNOWN blocks; FALSE is never overridable.</footer>
 <script>
 const $=id=>document.getElementById(id);
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+const activateTab=t=>{
+  const b=document.querySelector(`nav button[data-t="${t}"]`);
+  if(!b)return;
   document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));
   b.classList.add("active");
   document.querySelectorAll("main section").forEach(s=>s.classList.add("hidden"));
   $(b.dataset.t).classList.remove("hidden");
+};
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  activateTab(b.dataset.t);
+  history.replaceState(null,"","#"+b.dataset.t);
 });
+// Hash routing so a specific tab can be linked or captured headlessly.
+window.addEventListener("hashchange",()=>activateTab(location.hash.slice(1)));
+activateTab(location.hash.slice(1)||"overview");
 async function api(name,body){
   const r=await fetch("/api/"+name,{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body||{})});
@@ -429,13 +439,14 @@ async function runExecute(){
   out("ex_out","<div class='card muted'>executing in simulator…</div>");
   const r=await api("execute",{state:$("ex_state").value,token:$("ex_token").value,
     key:$("ex_key").value,simulate:$("ex_sim").value,nonce:$("ex_nonce").value||null,
-    device_fingerprint:$("ex_fp").value||null,journal:$("ex_journal").value||null,
+    device_fingerprint:$("ex_fp").value||null,staging_dir:$("ex_staging").value||null,
+    journal:$("ex_journal").value||null,
     timeout_s:+$("ex_timeout").value||600});
   if(r.error)return showError("ex_out",r.error);
   if(r.executed===false)return showError("chk_out","approval: "+JSON.stringify(r.approval));
   const rows=(r.steps||r.writes||[]).map(s=>`<div class="step">
-    <span class="name">${esc(s.entry||s.step||s.name||"")}</span>
-    ${pill(s.state||s.verification||"SIMULATED")}
+    <span class="name">${esc("#"+s.number+" "+s.action+(s.partition?" "+s.partition:""))}</span>
+    ${pill(s.state==="done"?"TRUE":s.state==="aborted"?"FALSE":"UNKNOWN")}
     <span class="detail">${esc(s.detail||s.reason||"")}</span></div>`).join("");
   out("ex_out",card("Execution <span class='pill SIMULATED'>SIMULATED</span>",
     (rows||"<p class='muted'>completed</p>")+

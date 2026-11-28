@@ -77,6 +77,40 @@ invents a fact to pass a gate:
   <img src="docs/screenshots/plan-safety.svg" alt="cairn plan safety report">
 </p>
 
+### The local workbench UI
+
+`cairn ui` serves the same audited core as a loopback-only dashboard with
+tri-state colour semantics — green `TRUE` = proven, red `FALSE` = unsafe and
+never overridable, amber `UNKNOWN` = blocks. Screenshots below are real
+headless-browser captures of the dashboard running the demo transcript
+simulator (ADR-027: every write is SIMULATED).
+
+The preflight wizard tab — the hero path, resumable and read-only:
+
+<p align="center">
+  <img src="docs/screenshots/ui-wizard.png" alt="Cairn UI: preflight wizard stages" width="820">
+</p>
+
+The device probe tab — read-only `getvar` facts with tri-state evidence pills:
+
+<p align="center">
+  <img src="docs/screenshots/ui-probe.png" alt="Cairn UI: device probe facts" width="820">
+</p>
+
+The recovery tab — vault backup plus the M6 drill, which proves the same-device
+restore and the cross-device refusal (both green) in the simulator:
+
+<p align="center">
+  <img src="docs/screenshots/ui-recovery.png" alt="Cairn UI: M6 recovery drill" width="820">
+</p>
+
+The execute tab — an approved plan running in the transcript simulator with a
+hash-chained journal:
+
+<p align="center">
+  <img src="docs/screenshots/ui-execute.png" alt="Cairn UI: simulator execute with journal" width="820">
+</p>
+
 ## Install
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
