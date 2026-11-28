@@ -279,6 +279,7 @@ def test_execute_happy_path_records_every_step(env) -> None:
     kinds = [record.kind for record in journal.records]
     assert kinds == [
         JournalKind.SESSION,
+        JournalKind.RECONCILED,
         JournalKind.STEP_STARTED,
         JournalKind.STEP_DONE,
         JournalKind.STEP_STARTED,
@@ -430,8 +431,9 @@ def test_resume_after_interrupted_reboot_refuses_to_rerun(env) -> None:
     _, _, _, tmp_path = env
     journal_path = tmp_path / "journal.jsonl"
     device = FakeDevice()
-    # session + 2 full steps + started(reboot) = 6 records, then die before reboot.
-    _run_until(env, device, journal_path, kill_after=6)
+    # session + reconciled + 2 full steps + started(reboot) = 7 records, then
+    # die before the reboot is issued.
+    _run_until(env, device, journal_path, kill_after=7)
     assert device.reboots == []
 
     resumed = execute_plan(_request(env, FakeTransport(device)), journal_path)
@@ -548,3 +550,179 @@ def test_simulated_transport_runs_against_the_fastboot_simulator(env, tmp_path) 
     assert result.verdict is Tri.TRUE
     assert result.completed
     assert all(step.exit_code == 0 for step in result.steps)
+
+
+class ReconcilingTransport(FakeTransport):
+    """FakeTransport with a read seam reporting a configurable merge state."""
+
+    def __init__(
+        self,
+        device: FakeDevice,
+        *,
+        merge_state: str = "none",
+        current_slot: str = "a",
+        readable: bool = True,
+    ) -> None:
+        super().__init__(device)
+        self._merge_state = merge_state
+        self._current_slot = current_slot
+        self._readable = readable
+        self.read_calls: list[str] = []
+
+    def read_var(self, name: str, *, timeout_s: float) -> ToolResult:
+        self.read_calls.append(name)
+        if not self._readable:
+            return ToolResult(
+                argv=("getvar", name),
+                exit_code=1,
+                stdout="",
+                stderr="FAILED (remote: 'not supported')",
+                duration_s=0.0,
+            )
+        value = self._current_slot if name == "current-slot" else self._merge_state
+        stdout = f"(bootloader) {name}: {value}\nOKAY\n" if value else "OKAY\n"
+        return ToolResult(
+            argv=("getvar", name), exit_code=0, stdout=stdout, stderr="", duration_s=0.0
+        )
+
+
+def test_reconciliation_refuses_a_mid_merge_device_before_any_write(env) -> None:
+    _, _, _, tmp_path = env
+    device = FakeDevice()
+    journal_path = tmp_path / "journal.jsonl"
+
+    result = execute_plan(
+        _request(env, ReconcilingTransport(device, merge_state="merging")), journal_path
+    )
+
+    assert result.verdict is Tri.FALSE
+    assert not result.completed
+    assert device.flashed == {}
+    assert device.reboots == []
+    journal = Journal.load(journal_path)
+    kinds = [record.kind for record in journal.records]
+    assert JournalKind.RECONCILED in kinds
+    assert kinds[-1] == JournalKind.ABORTED
+    recon = next(r for r in journal.records if r.kind is JournalKind.RECONCILED)
+    status = recon.payload["checks"]["snapshot-update-status"]
+    assert isinstance(status, dict)
+    assert status["state"] == "FALSE"
+
+
+def test_reconciliation_records_slot_and_proceeds_when_none(env) -> None:
+    _, _, _, tmp_path = env
+    device = FakeDevice()
+    transport = ReconcilingTransport(device, merge_state="none", current_slot="b")
+    journal_path = tmp_path / "journal.jsonl"
+
+    result = execute_plan(_request(env, transport), journal_path)
+
+    assert result.verdict is Tri.TRUE
+    assert set(transport.read_calls) == {"current-slot", "snapshot-update-status"}
+    journal = Journal.load(journal_path)
+    recon = next(r for r in journal.records if r.kind is JournalKind.RECONCILED)
+    checks = recon.payload["checks"]
+    assert checks["current-slot"] == {"ok": True, "value": "b"}
+    assert isinstance(checks["snapshot-update-status"], dict)
+    assert checks["snapshot-update-status"]["state"] == "TRUE"
+
+
+def test_reconciliation_treats_an_unreadable_merge_state_as_unknown(env) -> None:
+    _, _, _, tmp_path = env
+    device = FakeDevice()
+    transport = ReconcilingTransport(device, readable=False)
+    journal_path = tmp_path / "journal.jsonl"
+
+    result = execute_plan(_request(env, transport), journal_path)
+
+    # UNKNOWN does not block the simulator-only executor (SafetyGate semantics);
+    # the fact is journaled, not swallowed.
+    assert result.verdict is Tri.TRUE
+    journal = Journal.load(journal_path)
+    recon = next(r for r in journal.records if r.kind is JournalKind.RECONCILED)
+    status = recon.payload["checks"]["snapshot-update-status"]
+    assert isinstance(status, dict)
+    assert status["state"] == "UNKNOWN"
+
+
+def test_transport_without_read_seam_records_skipped_reconciliation(env) -> None:
+    _, _, _, tmp_path = env
+    device = FakeDevice()
+    journal_path = tmp_path / "journal.jsonl"
+
+    result = execute_plan(_request(env, FakeTransport(device)), journal_path)
+
+    assert result.verdict is Tri.TRUE
+    journal = Journal.load(journal_path)
+    recon = next(r for r in journal.records if r.kind is JournalKind.RECONCILED)
+    assert "no read seam" in str(recon.payload["checks"]["transport"])
+
+
+def test_resume_rotates_a_journal_past_the_growth_threshold(
+    env: tuple[Plan, Path, dict[str, str], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cairn.executor.executor as executor_module
+
+    _, _, _, tmp_path = env
+    journal_path = tmp_path / "journal.jsonl"
+    device = FakeDevice()
+    assert execute_plan(_request(env, FakeTransport(device)), journal_path).completed
+
+    monkeypatch.setattr(executor_module, "ROTATE_THRESHOLD_BYTES", 1)
+    device2 = FakeDevice()
+    resumed = execute_plan(_request(env, FakeTransport(device2)), journal_path)
+
+    successor = journal_path.with_name("journal.r1.jsonl")
+    assert successor.exists()
+    assert resumed.journal_path == successor
+    assert resumed.verdict is Tri.TRUE
+    # every step was already done in the predecessor, so nothing was re-written
+    assert device2.flashed == {}
+    assert device2.reboots == []
+    # the predecessor is intact evidence
+    assert journal_path.exists()
+    chain = Journal.load_chain(journal_path)
+    assert chain.records[-1].kind is JournalKind.COMPLETED
+    # a second resume lands no further rotation now that the threshold is back:
+    # the successor is the live tip and is small
+    monkeypatch.undo()
+    resumed2 = execute_plan(_request(env, FakeTransport(FakeDevice())), journal_path)
+    assert resumed2.journal_path == successor
+
+
+def test_rotation_detects_a_broken_continuation(
+    env: tuple[Plan, Path, dict[str, str], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cairn.executor.executor as executor_module
+
+    _, _, _, tmp_path = env
+    journal_path = tmp_path / "journal.jsonl"
+    assert execute_plan(_request(env, FakeTransport(FakeDevice())), journal_path).completed
+
+    monkeypatch.setattr(executor_module, "ROTATE_THRESHOLD_BYTES", 1)
+    assert execute_plan(_request(env, FakeTransport(FakeDevice())), journal_path).completed
+    successor = journal_path.with_name("journal.r1.jsonl")
+
+    # break the predecessor's last record so the continuation no longer verifies
+    raw = journal_path.read_bytes().splitlines()
+    last = json.loads(raw[-1])
+    last["record_sha256"] = "f" * 64
+    raw[-1] = json.dumps(last, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    journal_path.write_bytes(b"\n".join(raw) + b"\n")
+
+    with pytest.raises((JournalCorruptError, JournalWriteError)):
+        execute_plan(_request(env, FakeTransport(FakeDevice())), successor)
+
+
+def test_journal_append_refuses_to_grow_past_the_byte_limit(tmp_path: Path) -> None:
+    import cairn.executor.journal as journal_module
+
+    journal = Journal.create(tmp_path / "j.jsonl", {"plan_sha256": "x"})
+    monkey_limit = 1
+    original = journal_module.MAX_JOURNAL_BYTES
+    journal_module.MAX_JOURNAL_BYTES = monkey_limit
+    try:
+        with pytest.raises(JournalWriteError, match="byte limit"):
+            journal.append(JournalKind.STEP_DONE, {"number": 1})
+    finally:
+        journal_module.MAX_JOURNAL_BYTES = original

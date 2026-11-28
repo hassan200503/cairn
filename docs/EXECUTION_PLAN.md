@@ -298,9 +298,14 @@ resume; an interrupted reboot aborts with stop-and-reprobe and demands a fresh
 preflight; a previously failed step is never retried. The crash harness kills
 execution after every journal record and proves each resume reaches the exact
 uninterrupted final state (`tests/test_executor.py`); `cairn execute` wires this to
-the CLI and refuses real fastboot binaries (`ADR-027`). Pending: the real-device
-transport behind T15 and the M6 gate, a Virtual A/B/slot-aware state machine, and
-journal growth/rotation policy for very long plans.
+the CLI and refuses real fastboot binaries (`ADR-027`). The T26 slice added the
+journal growth/rotation policy (a journal nearing its 32 MiB limit is rotated at
+resume time into a verified continuation chain; predecessors stay on disk as
+evidence) and pre-write slot/VAB reconciliation: the executor reads
+`snapshot-update-status` and `current-slot` through the transport's read-only
+seam, journals a `reconciled` record, and aborts on a mid-merge state (SR-010
+FALSE; UNKNOWN is journaled as a warning in the simulator-only executor).
+Pending: the real-device transport behind T15 and the M6 gate.
 
 ### T15 - Recovery Kit, Vault design review, M6 gate
 
