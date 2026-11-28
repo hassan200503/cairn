@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Catalog rollback bounds (catalog schema v2): a device entry may carry cited
+  per-location `rollback_bounds`; the rollback oracle consults a bound only when
+  the stored value is unavailable (a maximum proves safety, a minimum proves a
+  downgrade, an inconclusive bound stays UNKNOWN, and a stored read outranks a
+  bound). Wired into `cairn rollback check --catalog` and `cairn wizard --catalog`
+  with the entry's source printed as the citation. Old v1 catalogs are refused.
+
 ## [0.2.0] - 2026-11-27
 
 ### Added

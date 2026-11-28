@@ -7,6 +7,7 @@ from cairn.catalog.device_catalog import (
     DeviceCatalog,
     DeviceEntry,
     PackageEntry,
+    RollbackBound,
     load_catalog,
     parse_catalog,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "DeviceCatalog",
     "DeviceEntry",
     "PackageEntry",
+    "RollbackBound",
     "load_catalog",
     "parse_catalog",
 ]

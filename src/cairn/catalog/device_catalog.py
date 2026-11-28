@@ -20,6 +20,7 @@ import binascii
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -27,10 +28,14 @@ from typing import Final
 from cairn.core.errors import CairnError
 
 CATALOG_KIND: Final = "cairn.catalog"
-CATALOG_SCHEMA_VERSION: Final = 1
+CATALOG_SCHEMA_VERSION: Final = 2
 MAX_CATALOG_BYTES: Final = 4 * 1024 * 1024
 MAX_TRUSTED_KEY_BYTES: Final = 8192
 MAX_SOURCE_CHARS: Final = 512
+# AOSP AVB rollback index locations and values are unsigned; 2**63 is far above
+# any real counter and keeps arithmetic inside signed-integer comfort.
+MAX_ROLLBACK_VALUE: Final = 2**63 - 1
+MAX_ROLLBACK_LOCATIONS: Final = 64
 
 _HEX64_RE: Final = re.compile(r"^[0-9a-f]{64}$")
 _NAME_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -43,6 +48,7 @@ _DEVICE_KEYS: Final[frozenset[str]] = frozenset(
         "trusted_key_sha256",
         "trusted_key_b64",
         "expected_lock_state",
+        "rollback_bounds",
         "source",
         "notes",
     }
@@ -56,6 +62,22 @@ class CatalogError(CairnError):
 
 
 @dataclass(frozen=True, slots=True)
+class RollbackBound:
+    """A caller-cited bound on one AVB rollback-index location's stored value.
+
+    Both ends are optional, but at least one must be present: a bound that
+    bounds nothing is not a fact. The rollback oracle consults a bound only
+    when the device's stored value is unavailable; a stored read outranks it.
+    """
+
+    minimum: int | None = None
+    maximum: int | None = None
+
+    def to_dict(self) -> dict[str, int | None]:
+        return {"minimum": self.minimum, "maximum": self.maximum}
+
+
+@dataclass(frozen=True, slots=True)
 class DeviceEntry:
     """One device's anchoring record; every field is caller-supplied."""
 
@@ -65,6 +87,7 @@ class DeviceEntry:
     trusted_key_sha256: str
     trusted_key: bytes | None
     expected_lock_state: str | None
+    rollback_bounds: Mapping[int, RollbackBound]
     source: str
     notes: str | None
 
@@ -83,6 +106,10 @@ class DeviceEntry:
                 else base64.b64encode(self.trusted_key).decode("ascii")
             ),
             "expected_lock_state": self.expected_lock_state,
+            "rollback_bounds": {
+                str(location): bound.to_dict()
+                for location, bound in sorted(self.rollback_bounds.items())
+            },
             "source": self.source,
             "notes": self.notes,
         }
@@ -152,6 +179,53 @@ def _optional(value: object, limit: int, what: str) -> str | None:
     return text
 
 
+def _decode_rollback_bounds(raw: object, what: str) -> dict[int, RollbackBound]:
+    """Decode per-location rollback bounds; ``None`` means the entry has none.
+
+    JSON object keys are strings, so each must name a non-negative integer
+    location. A bound entry must carry at least one end, both ends must be
+    non-negative integers within range, and a minimum may not exceed its
+    maximum.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise CatalogError(f"catalog {what} must be an object or null")
+    if len(raw) > MAX_ROLLBACK_LOCATIONS:
+        raise CatalogError(f"catalog {what} has more than {MAX_ROLLBACK_LOCATIONS} locations")
+    bounds: dict[int, RollbackBound] = {}
+    for key, value in raw.items():
+        key_text = _string(key, f"{what} location key")
+        if not key_text.isdecimal():
+            raise CatalogError(
+                f"catalog {what} location {key_text!r} is not a non-negative integer"
+            )
+        location = int(key_text)
+        if not isinstance(value, dict) or set(value) - {"minimum", "maximum"}:
+            raise CatalogError(
+                f"catalog {what} location {location} must have only 'minimum' and 'maximum'"
+            )
+        minimum = value.get("minimum")
+        maximum = value.get("maximum")
+        for name, bound in (("minimum", minimum), ("maximum", maximum)):
+            if bound is None:
+                continue
+            if isinstance(bound, bool) or not isinstance(bound, int):
+                raise CatalogError(
+                    f"catalog {what} location {location} {name} must be an integer or null"
+                )
+            if not 0 <= bound <= MAX_ROLLBACK_VALUE:
+                raise CatalogError(
+                    f"catalog {what} location {location} {name} is outside 0..{MAX_ROLLBACK_VALUE}"
+                )
+        if minimum is None and maximum is None:
+            raise CatalogError(f"catalog {what} location {location} must bound at least one end")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise CatalogError(f"catalog {what} location {location} minimum exceeds its maximum")
+        bounds[location] = RollbackBound(minimum=minimum, maximum=maximum)
+    return bounds
+
+
 def _decode_device_entry(raw: object, index: int) -> DeviceEntry:
     if not isinstance(raw, dict) or set(raw) != _DEVICE_KEYS:
         raise CatalogError(
@@ -199,6 +273,9 @@ def _decode_device_entry(raw: object, index: int) -> DeviceEntry:
         trusted_key_sha256=key_sha,
         trusted_key=trusted_key,
         expected_lock_state=lock_raw if isinstance(lock_raw, str) else None,
+        rollback_bounds=_decode_rollback_bounds(
+            raw["rollback_bounds"], f"device {index} rollback_bounds"
+        ),
         source=_source(raw["source"], f"device {index} source"),
         notes=_optional(raw["notes"], 1024, f"device {index} notes"),
     )

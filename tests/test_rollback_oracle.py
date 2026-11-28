@@ -395,3 +395,61 @@ def test_counter_rejects_out_of_range_and_inconsistent_values() -> None:
 def test_avb_rollback_inputs_rejects_zero_depth() -> None:
     with pytest.raises(RollbackError, match="max_depth"):
         avb_rollback_inputs(load_vbmeta(CHAIN_TOP), {}, max_depth=0)
+
+
+def test_catalog_bounds_prove_safety_when_stored_is_unknown() -> None:
+    report = evaluate_avb_rollback(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+        catalog_bounds={0: (None, 1), 3: (None, 3)},
+    )
+
+    assert report.state is Tri.TRUE
+    assert all("catalog proves" in finding.reason for finding in report.findings)
+
+
+def test_catalog_bounds_prove_a_downgrade_when_stored_is_unknown() -> None:
+    report = evaluate_avb_rollback(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+        catalog_bounds={0: (2, None), 3: (None, 3)},
+    )
+
+    assert report.state is Tri.FALSE
+    assert report.findings[0].state is Tri.FALSE
+    assert "at least 2" in report.findings[0].reason
+
+
+def test_an_inconclusive_catalog_bound_leaves_unknown() -> None:
+    report = evaluate_avb_rollback(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+        catalog_bounds={0: (0, 5), 3: (None, 3)},
+    )
+
+    assert report.state is Tri.UNKNOWN
+    assert report.findings[0].state is Tri.UNKNOWN
+
+
+def test_a_stored_value_outranks_the_catalog_bound() -> None:
+    report = evaluate_avb_rollback(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+        stored={0: 1, 3: 3},
+        catalog_bounds={0: (2, None), 3: (None, 3)},
+    )
+
+    assert report.state is Tri.TRUE
+    assert any("below the catalog minimum" in w for w in report.findings[0].warnings)
+
+
+def test_catalog_bounds_reach_chained_counters() -> None:
+    inputs = avb_rollback_inputs(
+        load_vbmeta(CHAIN_TOP),
+        {"boot": load_vbmeta(CHAIN_BOOT)},
+        catalog_bounds={3: (4, None)},
+    )
+
+    assert inputs.counters[1].catalog_minimum == 4
+    report = evaluate_rollback(inputs.counters)
+    assert report.state is Tri.FALSE
