@@ -636,3 +636,32 @@ the anchoring inputs against tampering in storage and transit. If catalogs are
 ever distributed as a signed public asset, the format gains an asymmetric
 signature alongside this one and KU-031 is updated; the v2 schema version is not
 reused.
+
+## ADR-031 - The UI is a loopback dashboard over the audited core, with no safety logic of its own
+
+**Context.** The workbench is CLI-first, and the CLI remains the complete
+interface (`cairn doctor|probe|wizard|plan|execute|avb|rollback|vab|catalog|
+recovery|ui`). A graphical surface helps operators see tri-state evidence at a
+glance, but a second implementation of the safety engine would be a second
+place for safety logic to drift — the failure mode every earlier ADR avoids by
+funnelling decisions through one audited module.
+
+**Decision.** `cairn ui` serves a local dashboard from the standard library only:
+a `ThreadingHTTPServer` bound to `127.0.0.1` (loopback, never a network
+interface) that serves one static HTML page and a JSON API. Every API handler in
+`cairn.ui.app` is a thin translation layer that calls the same audited functions
+the CLI calls (the wizard, the safety engine, the executor, the vault, the
+catalog verifier) and renders their existing typed results. The UI introduces no
+rules, no verdicts, and no overrides; its only policy is input hygiene (a 1 MiB
+body cap, JSON-object-only bodies) and the refusal to serve anything but the
+loopback interface. Writes remain simulator-gated by construction: the execute
+and drill endpoints construct the same `SimulatedFastbootTransport` the CLI
+constructs, so the ADR-027 refusal of real hardware applies unchanged.
+
+**Consequences.** The browser surface cannot be more permissive than the CLI,
+because there is no code path from a UI request to a safety decision that does
+not run the audited module first. The page is a plain single file with no build
+step and no external assets, so the dashboard is auditable the same way the
+source is. If the UI ever needs multi-user or remote access, that is a new
+decision with an authentication design — the loopback-only server must not be
+re-exposed by configuration.

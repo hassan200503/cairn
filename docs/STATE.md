@@ -10,16 +10,14 @@ Everything here is verifiable against the repository. If a claim in this file
 cannot be checked from the code, the tests, the fixtures, or a cited source, it
 does not belong here; it belongs in [`KNOWN_UNKNOWNS.md`](KNOWN_UNKNOWNS.md).
 
-**Last updated:** 2026-11-27, after the catalog signing slice (ADR-030):
-`cairn catalog sign` writes a detached HMAC-SHA256 signature of the exact
-catalog file bytes, `cairn catalog verify` re-checks schema and signature, and
-the anchoring paths (`avb key-check --catalog`, `rollback check --catalog`,
-`wizard --catalog`) accept `--catalog-key`/`--catalog-signature` and refuse a
-mismatched or half-supplied pair. Just before: catalog schema v2 rollback
-bounds wired into `cairn rollback check --catalog` and `cairn wizard
---catalog`, and the v0.2.0 release (installer scripts, README overhaul, tagged
-GitHub release). The catalog remains simulator-side anchoring input and the
-vault and drill remain simulator-only and externally unreviewed.
+**Last updated:** 2026-11-27, after the local UI slice (ADR-031): `cairn ui`
+serves a loopback-only dashboard (`127.0.0.1:8722`) over the audited core —
+JSON endpoints for doctor, probe, wizard, plan, execute, avb, rollback, vab,
+catalog, and recovery backup/drill — with tri-state TRUE/FALSE/UNKNOWN colour
+rendering and no safety logic of its own; writes stay simulator-gated
+(ADR-027). Just before: catalog signing (ADR-030), catalog rollback bounds,
+and the v0.2.0 release (installer scripts, README overhaul, tagged GitHub
+release). The vault and drill remain simulator-only and externally unreviewed.
 
 **How to maintain it:** update this file in the *same commit* as the code change
 it describes. If a slice changes what is implemented, this file changes with it.
@@ -82,6 +80,7 @@ src/cairn/
   executor/      simulator-gated plan executor, hash-chained write-ahead journal
   recovery/      encrypted device-bound vault, SR-008/SR-009 asset checks, M6 drill
   vab/           Virtual A/B merge-state (SR-010), dynamic-partition mode (SR-011), snapshot flows, super metadata parser
+  ui/            loopback-only local dashboard (ADR-031): JSON API over the audited core, static single-file SPA
 ```
 
 Design notes, in the order the reader should meet them:
@@ -137,6 +136,7 @@ Design notes, in the order the reader should meet them:
 | `cairn recovery verify VAULT [--passphrase-file F]` | verify a vault's MAC and recorded plaintext hashes | 0 verified / 1 tampered or wrong passphrase |
 | `cairn recovery restore VAULT --partition P --simulate TRANSCRIPT [--journal PATH] [--staging-dir DIR] --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F]` | restore a vault entry to its bound device identity in the simulator only; any other identity is REFUSED, never overridable (ADR-027, ADR-028) | 0 / 1 refused or failed / 2 usage / 3 simulator refused |
 | `cairn recovery drill --partition P --asset IMG --expected-sha256 H --vault VAULT --last-resort TEXT --simulate TRANSCRIPT --other-serial-sha256 H --other-fingerprint H --product PR --serial-sha256 H --device-fingerprint H [--passphrase-file F] [--json]` | run the M6 drill: verify, back up, restore same-device, refuse cross-device; the report is labelled SIMULATED and is not device evidence | 0 drill TRUE / 1 drill FAILED / 2 usage |
+| `cairn ui [--port P] [--no-browser]` | serve the local workbench dashboard on the loopback interface only (ADR-031): tri-state evidence view over doctor, probe, wizard, plan, execute, avb, rollback, vab, catalog, and recovery; every write path is the same simulator-gated transport as the CLI (ADR-027) | n/a (server) |
 | `cairn vab status [--fastboot PATH] [--serial S] [--simulate TRANSCRIPT]` | read-only `getvar snapshot-update-status` and SR-010 merge-state verdict: `none` passes, a mid-merge state is a never-overridable FALSE, anything unrecognized is UNKNOWN | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn vab dynpart --mode fastbootd\|bootloader [--fastboot PATH] [--serial S] [--simulate TRANSCRIPT]` | read-only SR-011 mode check: three getvars (`is-userspace`, `dynamic-partition`, `super-partition-name`) are compared with the job's required mode; a fastbootd job from the bootloader is FALSE, unreadable facts are UNKNOWN | 0 TRUE / 1 FALSE / 2 usage / 3 UNKNOWN |
 | `cairn vab cancel --simulate TRANSCRIPT --acknowledgment TEXT --recovery-asset IMG --recovery-sha256 H --last-resort TEXT [--json]` | cancel an in-progress snapshot: exact typed acknowledgment, verified recovery assets, stated last-resort path, and a matching merge state are all required; simulator only (ADR-027) | 0 / 1 refused or failed / 2 usage / 3 simulator error |
@@ -364,14 +364,14 @@ Local baseline at the time of writing:
 uv run ruff format --check .   # clean
 uv run ruff check .            # clean
 uv run mypy src                # clean
-uv run pytest -q               # 645 passed, 6 skipped
+uv run pytest -q               # 668 passed, 6 skipped
 ```
 
 The latest merged CI run is the catalog rollback-bounds slice (pull request
 [#17](https://github.com/hassan200503/cairn/pull/17), merge `4e042c8`), green
-across all seven jobs. The catalog signing slice postdates that run; its CI run
-must be green before merge. The 645-test baseline above was confirmed locally
-on the catalog signing slice.
+across all seven jobs. The catalog signing and local UI slices postdate that
+run; their CI run must be green before merge. The 668-test baseline above was
+confirmed locally on the UI slice (23 new UI tests in `tests/test_ui.py`).
 
 The six local skips are environmental, not gaps in coverage:
 

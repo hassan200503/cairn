@@ -272,6 +272,7 @@ is in [docs/STATE.md §4](docs/STATE.md).
 | `cairn vab` | status / dynpart / cancel / merge (cancel & merge simulator-only) |
 | `cairn execute` | run an approved plan in the simulator with a write-ahead journal |
 | `cairn recovery` | backup / verify / restore / drill |
+| `cairn ui` | local workbench dashboard on `127.0.0.1` (loopback only; tri-state evidence view) |
 
 Exit codes: `0` ok, `1` failed, `2` usage, `3` blocked or UNKNOWN.
 
@@ -295,6 +296,7 @@ src/cairn/
   executor/      simulator-gated executor, hash-chained write-ahead journal
   recovery/      encrypted device-bound vault, asset checks, M6 drill
   vab/           merge-state gate, dynamic-partition gate, snapshot flows, super metadata
+  ui/            loopback-only local dashboard (ADR-031) over the audited core
   sim/           transcript schema and fault-injecting fastboot simulator
 docs/            specification, safety rules, ADRs, known unknowns, hardware findings
 tools/           mutation harness and AOSP oracle builders

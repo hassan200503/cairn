@@ -221,6 +221,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the verification levels used in every report",
     )
 
+    ui = subparsers.add_parser(
+        "ui",
+        help="serve the local workbench dashboard (loopback only)",
+    )
+    ui.add_argument("--port", type=int, default=8722, help="loopback port (default 8722)")
+    ui.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="do not open a browser window automatically",
+    )
+
     doctor = subparsers.add_parser(
         "doctor",
         help="inspect the host, cable, drivers, and link quality",
@@ -1247,6 +1258,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "levels":
         for level in VerificationLevel:
             print(f"{level.name}: {level.label}")
+        return EXIT_OK
+
+    if args.command == "ui":
+        if args.port < 1 or args.port > 65535:
+            print("cairn ui: --port must be between 1 and 65535", file=sys.stderr)
+            return EXIT_USAGE
+        from cairn.ui import serve
+
+        serve(args.port, open_browser=not args.no_browser)
         return EXIT_OK
 
     if args.command == "doctor":

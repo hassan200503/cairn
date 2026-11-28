@@ -19,6 +19,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   downgrade, an inconclusive bound stays UNKNOWN, and a stored read outranks a
   bound). Wired into `cairn rollback check --catalog` and `cairn wizard --catalog`
   with the entry's source printed as the citation. Old v1 catalogs are refused.
+- Local workbench UI (ADR-031): `cairn ui` serves a loopback-only dashboard
+  (`127.0.0.1:8722`) over the audited core — doctor, probe, wizard, plan,
+  execute, avb, rollback, vab, catalog, and recovery backup/drill — with
+  tri-state TRUE/FALSE/UNKNOWN colour rendering. No safety logic lives in the
+  UI; every write path is the same simulator-gated transport as the CLI
+  (ADR-027). 23 new tests in `tests/test_ui.py`.
 
 ## [0.2.0] - 2026-11-27
 
