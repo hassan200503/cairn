@@ -23,6 +23,7 @@ FMT="eda105459b7be42e72ec6337ccb388b098a2acbe"
 # Which subtrees of each pinned repo the build needs (keeps the clone light).
 SPARSE_core="fs_mgr/liblp libsparse"
 SPARSE_extras="partition_tools ext4_utils"
+SPARSE_logging="liblog"
 
 for pin in "${PINS[@]}"; do
   url="${pin%% *}"; sha="${pin##* }"
@@ -31,7 +32,9 @@ for pin in "${PINS[@]}"; do
   dir="$AOSP_ROOT/$sha"
   if [ ! -d "$dir/.git" ]; then
     git clone --filter=blob:none --no-checkout --depth 1 "$url" "$dir"
-    git -C "$dir" sparse-checkout set ${!sparse_var:-.}
+    if [ -n "${!sparse_var:-}" ]; then
+      git -C "$dir" sparse-checkout set "${!sparse_var}"
+    fi
     git -C "$dir" checkout "$sha" 2>/dev/null || {
       git -C "$dir" fetch --depth 1 origin "$sha"
       git -C "$dir" checkout "$sha"
